@@ -3,6 +3,11 @@ import numpy as np
 import pandas as pd
 import os
 
+from skimage.morphology import disk
+from skimage.filters import threshold_otsu, rank, threshold_local
+from skimage.util import img_as_ubyte
+from skimage.io import imsave
+
 SIZE_PIX_20X = 0.42604
 
 def find_raw_por(binary_img):
@@ -104,25 +109,33 @@ def pad_dict_list(dict_list: dict, padel=np.nan):
             dict_list[lname] += [padel] * (lmax - ll)
     return dict_list
 
-def get_binary_img(img_path: str, th_up:int =0):
+def get_binary_img(img_path: str, bluring: str='Gaussian', gamma_eq=False):
     """converts the image into binary format 
     (using the Otsu method)
     
     Parameters
     ----------
     img_path : str
-    th_up : int
+    blurung: str
+        Choises: Gaussian (default), Median
+    gamma_eq: bool
 
     Returns
     -------
-    dict_list: dict
+    dst: np.ndarray
     """
     img = cv2.imread(img_path)
     img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    img = cv2.GaussianBlur(img, (7, 7), 0)
+
+    if gamma_eq:
+        img = cv2.equalizeHist(img)
+
+    if bluring == 'Gaussian':
+        img = cv2.GaussianBlur(img, (7, 7), 0)
+    elif bluring == 'Median':
+        img= cv2.medianBlur(img, 7)
+
     th, dst = cv2.threshold(img, 230, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    th += th_up
-    th, dst = cv2.threshold(img, th, 255, cv2.THRESH_BINARY)
     return dst
 
 def sma(series, interv=20):
