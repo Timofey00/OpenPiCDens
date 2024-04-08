@@ -3,11 +3,6 @@ import numpy as np
 import pandas as pd
 import os
 
-from skimage.morphology import disk
-from skimage.filters import threshold_otsu, rank, threshold_local
-from skimage.util import img_as_ubyte
-from skimage.io import imsave
-
 SIZE_PIX_20X = 0.42604
 
 def find_raw_por(binary_img):
@@ -109,16 +104,20 @@ def pad_dict_list(dict_list: dict, padel=np.nan):
             dict_list[lname] += [padel] * (lmax - ll)
     return dict_list
 
-def get_binary_img(img_path: str, bluring: str='Gaussian', gamma_eq=False):
+def get_binary_img(img_path: str, blur_type: str='Gaussian', th_method='Otsu' gamma_eq=False, ksize=7):
     """converts the image into binary format 
     (using the Otsu method)
     
     Parameters
     ----------
     img_path : str
-    blurung: str
-        Choises: Gaussian (default), Median
+    blur_type: str
+        Choises: Gaussian (default), Median, Normalized Box Filter (NBF), Bilateral
+    th_method: str
+        Choises: Otsu, Mean, Gaussian
     gamma_eq: bool
+    ksize: int
+        Kernel size
 
     Returns
     -------
@@ -130,13 +129,24 @@ def get_binary_img(img_path: str, bluring: str='Gaussian', gamma_eq=False):
     if gamma_eq:
         img = cv2.equalizeHist(img)
 
-    if bluring == 'Gaussian':
-        img = cv2.GaussianBlur(img, (7, 7), 0)
-    elif bluring == 'Median':
-        img= cv2.medianBlur(img, 7)
+    # Choice bluring method
+    if blur_type == 'Gaussian':
+        img = cv2.GaussianBlur(img, (ksize, ksize), 0)
+    elif blur_type == 'Median':
+        img= cv2.medianBlur(img, ksize)
+    elif blur_type == 'NBF':
+        img = cv2.blur(img, (ksize, ksize)) 
+    elif blur_type == 'Bilateral':
+        img = cv2.bilateralFilter(img, 11, 41, 21)
 
-    th, dst = cv2.threshold(img, 230, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    return dst
+    # Choice thresholding method
+    if th_method == 'Otsu':
+        th, bi_img = cv2.threshold(img, 230, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    elif th_method == 'Mean':
+        bi_img = cv2.adaptiveThreshold(img,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY,11,2)
+    elif th_method == 'Gaussian':
+        bi_img = cv2.adaptiveThreshold(img,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY,11,2)
+    return bi_img
 
 def sma(series, interv=20):
     new_data = []
