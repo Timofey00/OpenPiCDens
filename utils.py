@@ -5,15 +5,16 @@
 import numpy as np
 import pandas as pd
 import os
-from statistics import mean
+from statistics import mean, median
 
-from .measure import *
+from measure import *
+from settings import *
 
 def get_rw(
     por_df: pd.DataFrame, 
     name_file: str='rw', 
     ext: str='txt', 
-    save_dir: str='rw'):
+    save_dir: str=rw_path):
     """return tree ring width chronology
     
     Parameters
@@ -31,9 +32,9 @@ def get_rw(
     """
     if not os.path.isdir(save_dir):
         os.mkdir(save_dir, 0o754)
-    trw = {'trw': []}
+    trw = {name_file: []}
     for col in por_df.columns:
-        trw['trw'].append(por_df[col].count())
+        trw[name_file].append(por_df[col].count())
     trw_df = pd.DataFrame(data=trw)
     trw_df.to_csv(f'{save_dir}/{name_file}.{ext}', sep='\t', index=False)
     return trw_df
@@ -43,7 +44,7 @@ def get_mxmn_por(
     mod='mxmn', 
     names_files={'mxp': 'mxp', 'mnp':'mnp'},
     ext: str='txt', 
-    save_dir: str='mxmn'
+    save_dir: str=mxmn_path
     ):
     """return max, min and mean porosity profile chronology
     
@@ -92,27 +93,40 @@ def scan_all_kind_dir(dir_path: str):
     """
     tree_dirs = [dir_path + d for d in sorted(os.listdir(dir_path), key=lambda f: int(f))]
     all_trees = []
+    all_trees_rw = []
+    all_trees_mxp = []
+    all_trees_mnp = []
     for td in tree_dirs:
-        print(os.path.split(td)[-1])
-        print(td)
         prename_file = os.path.split(td)[-1]
         tree_df = scan_dir(td+'/', name_file=f"{prename_file} por all year")
-        get_mxmn_por(tree_df, names_files={'mxp': f'{prename_file} mxp', 'mnp':f'{prename_file} mnp'})
-        get_rw(tree_df, name_file=f'{prename_file} rw')
+        mxp, mnp = get_mxmn_por(tree_df, names_files={'mxp': f'{prename_file} mxp', 'mnp':f'{prename_file} mnp'})
+        all_trees_rw.append(get_rw(tree_df, name_file=f'{prename_file} rw'))
+        all_trees_mnp.append(mnp)
+        all_trees_mxp.append(mxp)
         all_trees.append(tree_df)
+    rw_df = pd.concat(all_trees_rw, axis=1).to_csv(f'{rw_path}/rw.txt')
+    mxp_df = pd.concat(all_trees_mxp, axis=1).to_csv(f'{rw_path}/mxp.txt')
+    mnp_df = pd.concat(all_trees_mnp, axis=1).to_csv(f'{rw_path}/mnp.txt')
     return all_trees
 
 def norm_por_df(
     por_df: pd.DataFrame,
+    norm_method: str="median",
     name_file: str='norm_por',
     ext: str='txt', 
-    save_dir: str='norm_porosity',
+    save_dir: str=norm_por_path,
     ):
     """normalizes all density profiles (by the length of the smallest ring)
     
     Parameters
     ----------
     por_df : pd.DataFrame
+    norm_method : 'str'
+        Choices: small_ring, median_ring, mean_ring
+    ext: str
+        extension of save file
+    save_dir : str
+        save directory
 
     Returns
     -------
@@ -122,70 +136,78 @@ def norm_por_df(
         os.mkdir(save_dir, 0o754)
 
     clear_por = {}
-    min_rw = 10000
+    lens = []
+
     for col in por_df.columns:
         clear_por.update({col: list(filter(lambda x: str(x)!='nan', por_df[col].tolist()))})
         if len(clear_por[col]) == 0:
             clear_por.pop(col)
             continue
-        if min_rw > len(clear_por[col]):
-            min_rw = len(clear_por[col])
+        lens.append(len(clear_por[col]))
+    if not lens:
+        return por_df
+    if norm_method == "small_ring":
+        req_rw = min(lens)
+    elif norm_method == "median":
+        req_rw = median(lens)
+    elif norm_method == "mean":
+        req_rw = mean(lens)
+
     n_p = {}
     for cp in clear_por:
-        n_p.update({cp: norm_por(clear_por[cp], min_rw/len(clear_por[cp]))})
-        if len(n_p[cp]) < min_rw:
-            min_rw = len(n_p[cp])
+        n_p.update({cp: norm_por(clear_por[cp], req_rw/len(clear_por[cp]))})
+        if len(n_p[cp]) < req_rw:
+            req_rw = len(n_p[cp])
     for n in n_p:
-        if len(n_p[n]) > min_rw:
-            n_p[n] = n_p[n][:min_rw]
+        if len(n_p[n]) > req_rw:
+            n_p[n] = n_p[n][:int(req_rw)]
 
     n_p_df = pd.DataFrame(data=n_p)
     n_p_df.to_csv(f'{save_dir}/{name_file}.{ext}', sep='\t', index=False)
     return n_p_df
 
-def get_long_norm_por(dir_path: str):
+
+
+def get_long_norm_por(dir_path: str, save_dir: str =norm_por_path):
     """create a normalized long-term porosity profile
     
     Parameters
     ----------
     dir_path : str
 
-    Returns
-    -------
-
     """
     all_trees = scan_all_kind_dir(dir_path)
     files_names = sorted(os.listdir(dir_path), key=lambda f: int(f))
-    all_years = {y: {} for y in range(1982, 2023)}
+    all_years = {y: {} for y in range(1900, 2023)}
 
     long_norm_por = {f: [] for f in files_names}
     mxn = {'mxn': []}
 
-    for y in range(1982, 2023):
+    for y in range(1900, 2023):
         i = 0
         for df in all_trees:
-            # print(df.columns.tolist())
             if y in df.columns.tolist():
                 l = list(filter(lambda x: x!= np.nan, df[y].tolist()))
                 all_years[y].update({files_names[i]: l})
             i+= 1
     all_df = []
     for y in all_years:
-        print(y)
         d = pad_dict_list(all_years[y])
         df = pd.DataFrame(d)
+        if df.empty:
+            continue
         n_p = norm_por_df(df)
         all_df.append(n_p)
 
         # n_p.to_csv(f'{y} n_p.txt', sep='\t', index=False)
-    pd.concat(all_df).to_csv(f'long norm porosity.txt', sep='\t', index=False)
+    pd.concat(all_df).to_csv(f'{save_dir}/long norm porosity.txt', sep='\t', index=False)
 
 def scan_dir(
     dir_path: str, 
     name_file: str='por all year', 
     year_start: int=2022,
     ext: str='txt', 
-    save_dir: str='multiscan',
+    save_dir: str=multiscan_path,
 
     ):
     """scans a directory with individual trees
@@ -194,7 +216,14 @@ def scan_dir(
     ----------
     dir_path : str
     name_file: str, optional
-    year_start: int, optional       
+    year_start: int, optional
+    ext: str
+        extension of save file
+    save_dir : str
+        save directory 
+    Returns
+    -------
+    por_all_year_df : pd.DataFrame
     """
     if not os.path.isdir(save_dir):
         os.mkdir(save_dir, 0o754)

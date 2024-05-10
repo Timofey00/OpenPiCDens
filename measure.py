@@ -2,8 +2,10 @@ import cv2
 import numpy as np
 import pandas as pd
 import os
+from statistics import mean
 
-SIZE_PIX_20X = 0.42604
+from settings import pix_to_mcm
+
 
 def find_raw_por(binary_img):
     """Return raw porosity, where x_axis is numbers of pixels
@@ -21,24 +23,53 @@ def find_raw_por(binary_img):
         por.append(b_pix / y_img_size)
     return por
 
-def norm_por(por: list, convert_coef=SIZE_PIX_20X):
+def norm_por(por: list, convert_coef=pix_to_mcm):
     """normalizes the porosity profile along the length in accordance with the conversion coefficient
 
     Parameters
     ----------
     por : List
-    convert_coef           
+    convert_coef : int        
     """
     norm_por = []
     size_por = len(por)
-    step = 1 / convert_coef
+    req_len = len(por) * convert_coef
     step_sum = 0
 
-    while step_sum < size_por-step:
-        n = int(round(step, 0))
-        cur_base_index = int(round(step_sum, 0))
-        norm_por.append(sum((por[cur_base_index + i] for i in range(n))) / n)
-        step_sum += step
+    if convert_coef < 1:
+        if convert_coef == pix_to_mcm:
+            req_len += 20
+            convert_coef = req_len / size_por
+        step = 1 / convert_coef
+        while step_sum < size_por-step:
+            n = int(round(step, 0))
+            cur_base_index = int(round(step_sum, 0))
+            norm_por.append(sum((por[cur_base_index + i] for i in range(n))) / n)
+            step_sum += step
+            if step_sum > size_por:
+                step_sum = size
+
+    elif convert_coef > 1:
+        step = size_por / (req_len - size_por)
+        i = 0
+        rb = size_por-step - 1 
+        while rb < size_por:
+            lb = int(round(step_sum, 0))
+            rb = int(round(step_sum + step, 0))
+            if rb == lb :
+                pre_part = []
+                rb += 1
+            elif rb > size_por:
+                rb = size_por
+            else:
+                pre_part = por[lb: rb]
+
+            cur_sublist = [mean(por[lb: rb])]
+            norm_por += (pre_part + cur_sublist)
+
+            step_sum += step
+    else:
+        return por
 
     return norm_por
 
@@ -104,7 +135,13 @@ def pad_dict_list(dict_list: dict, padel=np.nan):
             dict_list[lname] += [padel] * (lmax - ll)
     return dict_list
 
-def get_binary_img(img_path: str, blur_type: str='Gaussian', th_method='Otsu' gamma_eq=False, ksize=7):
+def get_binary_img(
+    img_path: str, 
+    blur_type: str='Gaussian', 
+    th_method: str='Otsu', 
+    gamma_eq: bool=False, 
+    ksize: int=7, 
+    th_up: int=0):
     """converts the image into binary format 
     (using the Otsu method)
     
@@ -118,10 +155,12 @@ def get_binary_img(img_path: str, blur_type: str='Gaussian', th_method='Otsu' ga
     gamma_eq: bool
     ksize: int
         Kernel size
+    th_up: int
+        value by which the threshold is raised, obtained using the Otsu method
 
     Returns
     -------
-    dst: np.ndarray
+    bi_img: np.ndarray
     """
     img = cv2.imread(img_path)
     img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -142,6 +181,8 @@ def get_binary_img(img_path: str, blur_type: str='Gaussian', th_method='Otsu' ga
     # Choice thresholding method
     if th_method == 'Otsu':
         th, bi_img = cv2.threshold(img, 230, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        if th_up:
+        _, bi_img = cv2.threshold(img, th+th_up, 255, cv2.THRESH_BINARY)
     elif th_method == 'Mean':
         bi_img = cv2.adaptiveThreshold(img,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY,11,2)
     elif th_method == 'Gaussian':
