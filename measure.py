@@ -182,7 +182,7 @@ def get_binary_img(
     if th_method == 'Otsu':
         th, bi_img = cv2.threshold(img, 230, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         if th_up:
-        _, bi_img = cv2.threshold(img, th+th_up, 255, cv2.THRESH_BINARY)
+            _, bi_img = cv2.threshold(img, th+th_up, 255, cv2.THRESH_BINARY)
     elif th_method == 'Mean':
         bi_img = cv2.adaptiveThreshold(img,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY,11,2)
     elif th_method == 'Gaussian':

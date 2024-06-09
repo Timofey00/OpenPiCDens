@@ -14,7 +14,9 @@ def get_rw(
     por_df: pd.DataFrame, 
     name_file: str='rw', 
     ext: str='txt', 
-    save_dir: str=rw_path):
+    save_dir: str=rw_path,
+    col_name='rw'
+    ):
     """return tree ring width chronology
     
     Parameters
@@ -32,9 +34,9 @@ def get_rw(
     """
     if not os.path.isdir(save_dir):
         os.mkdir(save_dir, 0o754)
-    trw = {name_file: []}
+    trw = {col_name: []}
     for col in por_df.columns:
-        trw[name_file].append(por_df[col].count())
+        trw[col_name].append(por_df[col].count())
     trw_df = pd.DataFrame(data=trw)
     trw_df.to_csv(f'{save_dir}/{name_file}.{ext}', sep='\t', index=False)
     return trw_df
@@ -98,15 +100,16 @@ def scan_all_kind_dir(dir_path: str):
     all_trees_mnp = []
     for td in tree_dirs:
         prename_file = os.path.split(td)[-1]
+        col_name = sp_name + os.path.split(td)[-1]
         tree_df = scan_dir(td+'/', name_file=f"{prename_file} por all year")
-        mxp, mnp = get_mxmn_por(tree_df, names_files={'mxp': f'{prename_file} mxp', 'mnp':f'{prename_file} mnp'})
-        all_trees_rw.append(get_rw(tree_df, name_file=f'{prename_file} rw'))
+        mxp, mnp = get_mxmn_por(tree_df, names_files={'mxp': f'mxp {prename_file}', 'mnp':f'mnp {prename_file}'})
+        all_trees_rw.append(get_rw(tree_df, name_file=f'rw {prename_file}', col_name=col_name))
         all_trees_mnp.append(mnp)
         all_trees_mxp.append(mxp)
         all_trees.append(tree_df)
-    rw_df = pd.concat(all_trees_rw, axis=1).to_csv(f'{rw_path}/rw.txt')
-    mxp_df = pd.concat(all_trees_mxp, axis=1).to_csv(f'{rw_path}/mxp.txt')
-    mnp_df = pd.concat(all_trees_mnp, axis=1).to_csv(f'{rw_path}/mnp.txt')
+    rw_df = pd.concat(all_trees_rw, axis=1).to_csv(f'{rw_path}/rw.txt', sep='\t')
+    mxp_df = pd.concat(all_trees_mxp, axis=1).to_csv(f'{rw_path}/mxp.txt', sep='\t')
+    mnp_df = pd.concat(all_trees_mnp, axis=1).to_csv(f'{rw_path}/mnp.txt', sep='\t')
     return all_trees
 
 def norm_por_df(
@@ -165,7 +168,6 @@ def norm_por_df(
     n_p_df = pd.DataFrame(data=n_p)
     n_p_df.to_csv(f'{save_dir}/{name_file}.{ext}', sep='\t', index=False)
     return n_p_df
-
 
 
 def get_long_norm_por(dir_path: str, save_dir: str =norm_por_path):
