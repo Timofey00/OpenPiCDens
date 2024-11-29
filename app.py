@@ -288,7 +288,7 @@ class PICDens():
             meanPorosityDict.update({n: meanPorosity})
         
         maximumPorosityDict = pad_dict_list(maximumPorosityDict)
-        minimumPorosityDict = pad_dict_list(maximumPorosityDict)
+        minimumPorosityDict = pad_dict_list(minimumPorosityDict)
         meanPorosityDict = pad_dict_list(meanPorosityDict)
         rwDict = pad_dict_list(rwDict)
 
