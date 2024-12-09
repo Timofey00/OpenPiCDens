@@ -1,4 +1,87 @@
 """
+support functions
+"""
+
+import numpy as np
+import pandas as pd
+
+def pad_dict_list(dict_list: dict, padel=np.nan) -> dict:
+    """
+    fills short lists with padels
+    
+    Parameters
+    ----------
+    dict_list : dict
+    padel
+
+    Returns
+    -------
+    dict_list: dict
+    """
+    lmax = 0
+    for lname in dict_list.keys():
+        lmax = max(lmax, len(dict_list[lname]))
+    for lname in dict_list.keys():
+        ll = len(dict_list[lname])
+        if  ll < lmax:
+            dict_list[lname] += [padel] * (lmax - ll)
+    return dict_list
+
+def sma(series: list, interv: int=20) -> list:
+    """
+    Simple Moving Average
+
+    Parameters
+    ----------
+    series : list
+    interv: int
+
+    Returns
+    -------
+    smaSeries: list
+    """
+    smaSeries = []
+    for d in range(interv, len(series)):
+        avg = sum(series[d-interv:d]) / interv
+        smaSeries.append(avg)
+    return smaSeries
+
+def mathRound(n: int | float) -> int:
+    """
+    mathematical rounding
+
+    Parameters
+    ----------
+    n : int | float
+
+    Returns
+    -------
+    n: int
+    """
+    if n - int(n) > 0.5:
+        return int(n)+1
+    else:
+        return int(n)
+
+def smaDF(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    smoothing of all curves in the dataframe
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+
+    Returns
+    -------
+    smaDF: pd.DataFrame
+    """
+    newDict = {}
+    for c in df.columns:
+        newDict.update({c:sma(df[c].tolist())})
+    smaDF = pd.DataFrame(newDict)
+    return smaDF
+
+"""
 Main App-module
 """
 
@@ -8,8 +91,6 @@ from statistics import mean, median
 import numpy as np
 import pandas as pd
 import cv2
-
-from utils import *
 
 
 class PICDens():
@@ -635,3 +716,139 @@ class PICDens():
         else:
             th, biImg = cv2.threshold(img, constantTh, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         return biImg
+
+
+
+from tkinter import *
+from tkinter import ttk
+from tkinter import filedialog
+ 
+
+
+savePath = "D:/learn/Shrubs/trees/TAR 2024/results/PS/"
+rootPath = "D:/learn/Shrubs/trees/TAR 2024/cut photo/PS/"
+pixToMcmCoef = 0.42604
+speciesName = 'PS' # Pinus Sylvestris
+
+
+
+class Desk:
+	def __init__(self):
+
+		self.root = Tk()
+		self.root.title("OPENPICDENS")
+		self.root.geometry("500x300")
+		for c in range(10): self.root.columnconfigure(index=c, weight=1)
+		for r in range(10): self.root.rowconfigure(index=r, weight=1)
+
+		scanButton = ttk.Button(text="Start scan path", command=self.click_scan_button)
+		scanButton.grid(row=0, column=1, columnspan=10)
+
+		self.rootPath = StringVar()
+		self.savePath = StringVar()
+		self.pixToMcmCoef = DoubleVar()
+		self.speciesName = StringVar()
+		self.normNumber = IntVar()
+		self.yearStart = IntVar()
+		self.biMethod = StringVar()
+
+		self.pixToMcmCoef.set(0.42604)
+		self.normNumber.set(1000)
+		self.yearStart.set(2024)
+
+
+		rootPathEntry = ttk.Entry(textvariable=self.rootPath, width=60)
+		rootPathEntry.grid(row=1, column=1, columnspan=3)
+		savePathEntry = ttk.Entry(textvariable=self.savePath, width=60)
+		savePathEntry.grid(row=2, column=1, columnspan=3)
+		
+
+		pixToMcmlabel = ttk.Label(text="pixToMcmCoef")
+		pixToMcmlabel.grid(row=3, column=1, columnspan=1)
+		pixTomMcmEntry = ttk.Entry(textvariable=self.pixToMcmCoef, width=15)
+		pixTomMcmEntry.grid(row=3, column=2, columnspan=1)
+
+		speciesNamelabel = ttk.Label(text="Species Name")
+		speciesNamelabel.grid(row=3, column=3, columnspan=1)
+		speciesNameEntry = ttk.Entry(textvariable=self.speciesName, width=15)
+		speciesNameEntry.grid(row=3, column=4, columnspan=1)
+
+		speciesNamelabel = ttk.Label(text="Norm number")
+		speciesNamelabel.grid(row=4, column=1, columnspan=1)
+		speciesNameEntry = ttk.Entry(textvariable=self.normNumber, width=15)
+		speciesNameEntry.grid(row=4, column=2, columnspan=1)
+
+		speciesNamelabel = ttk.Label(text="Year Start")
+		speciesNamelabel.grid(row=4, column=3, columnspan=1)
+		speciesNameEntry = ttk.Entry(textvariable=self.yearStart, width=15)
+		speciesNameEntry.grid(row=4, column=4, columnspan=1)
+
+		# speciesNamelabel = ttk.Label(text="Year Start")
+		# speciesNamelabel.grid(row=4, column=3, columnspan=1)
+		# speciesNameEntry = ttk.Entry(textvariable=self.yearStart, width=15)
+		# speciesNameEntry.grid(row=4, column=4, columnspan=1)
+
+		biLabel = ttk.Label(text="Select binarization method")
+		biLabel.grid(row=5, column=1, columnspan=1)
+		biMethods = ['Otsu', 'constant threshold', 'Mean', 'Gaussian']
+		self.biMethodsVar = StringVar(value=biMethods)
+		self.biListBox = Listbox(listvariable=self.biMethodsVar, width=15, selectmode=EXTENDED)
+		self.biListBox.bind("<<ListboxSelect>>", self.biSelect)
+		self.biListBox.grid(row=5, column=2, rowspan=2)
+		
+		rootPathButton = Button(text="Browse root path", command=self.browseRootPath)
+		rootPathButton.grid(row=1, column=4)
+		savePathButton = Button(text="Browse save path", command=self.browseSavePath)
+		savePathButton.grid(row=2, column=4)
+
+	# def pixToMcmCoefCallback(self, event):
+	# 	print(self.pixToMcmCoef)
+
+	def biSelect(self, event):
+		selected_indices = self.biListBox.curselection()
+		selected_method = ",".join([self.biListBox.get(i) for i in selected_indices])
+		self.biMethod.set(selected_method)
+
+	def click_scan_button(self):
+		rootPath = self.rootPath.get()
+		savePath = self.savePath.get()
+		pixToMcmCoef = self.pixToMcmCoef.get()
+		speciesName = self.speciesName.get()
+		normNumber = self.normNumber.get()
+		biMethod = self.biMethod.get()
+		if biMethod == 'constant threshold': biMethod=''
+		pD = PICDens(savePath=savePath, root=rootPath, pixToMcmCoef=pixToMcmCoef, speciesName=speciesName, normNumber=normNumber, yearStart=2023, biMethod=biMethod)
+		pD.startScan()
+
+	def browseRootPath(self):
+	    # Allow user to select a directory and store it in global var
+	    # called folder_path
+	    rootPath = filedialog.askdirectory()
+	    self.rootPath.set(rootPath)
+	    print(rootPath)
+
+	def browseSavePath(self):
+	    # Allow user to select a directory and store it in global var
+	    # called folder_path
+	    savePath = filedialog.askdirectory()
+	    self.savePath.set(savePath)
+	    print(savePath)
+
+	def start(self):
+		self.root.mainloop()
+
+if __name__ == '__main__':
+	w = Desk()
+	w.start()
+
+
+
+
+
+
+
+
+
+
+
+
