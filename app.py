@@ -473,6 +473,29 @@ class PICDens():
         return maxPorosity, minPorosity, meanPorosity
 
     def getEarlyLateWidth(self, porosityProfiles: pd.DataFrame) -> tuple:
+        """return early width, late width, early fraction, late fraction, 
+        late wood porosity and early wood porosity chronology
+        
+        Parameters
+        ----------
+        porosityProfiles : pd.DataFrame
+            averaged annualized porosity profiles of one tree
+
+        Returns
+        -------
+        earlyWidthList : List
+            yearly early width
+        lateWidthList : List
+            yearly late width
+        earlyPercList : List
+            yearly earlywood fraction
+        latePercList : List
+            yearly latewood fraction
+        meanPorEarlyWoodList : List
+            yearly earlywood porosity
+        meanPorLateWoodList : List
+            yearly latewood porosity
+        """
         columns = porosityProfiles.columns
         years = sorted(list(map(lambda c: int(c), columns)))
         maxYear = max(years)
