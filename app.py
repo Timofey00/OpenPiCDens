@@ -4,13 +4,13 @@ Main App-module
 
 import os
 from statistics import mean, median
+import pathlib
 
 import numpy as np
 import pandas as pd
 import cv2
 
 from utils import *
-
 
 class PICDens():
     """
@@ -62,14 +62,15 @@ class PICDens():
         pixToMcmCoef = 1,
         normMethod="median",
         smaInterval=20,
-        biMethod='Otsu'
+        biMethod='Otsu',
+        predBI=None
         ):
 
         self.savePath = savePath
         self.root = root
         self.pixToMcmCoef = pixToMcmCoef
         self.speciesName = speciesName
-        self.yearStart = 2024
+        self.yearStart = yearStart
         self.normNumber = normNumber
         self.normMethod="median"
         self.smaInterval = smaInterval
@@ -94,7 +95,7 @@ class PICDens():
 
         """
         
-        treesPorosityDict, normPorosityDict, rwDF, maxPorosityDF, minPorosityDF, meanPorosityDF, rawPorosityDict = self.scanRoot()
+        treesPorosityDict, normPorosityDict, rwDF, maxPorosityDF, minPorosityDF, meanPorosityDF, rawPorosityDict, earlyWidthDF, lateWidthDF, earlyPercDF, latePercDF, meanPorEarlyWoodDF, meanPorLateWoodDF = self.scanRoot()
         longPorosityProfileInNaturalValuesDF, _ = self.getLongPorosityProfile(treesPorosityDict, normMethod=self.normMethod)
         longPorosityProfileNorm, AVG = self.getLongPorosityProfile(normPorosityDict, normMethod=None)   
         
@@ -109,6 +110,13 @@ class PICDens():
         savePathNormPorosity = os.path.join(self.savePath, 'normPorosity')
         savePathRawPorosity = os.path.join(self.savePath, 'rawPorosityData')
 
+        savePathEarlyWidth = os.path.join(self.savePath, 'earlyWidth.txt')
+        savePathLateWidth = os.path.join(self.savePath, 'lateWidth.txt')
+        savePathEarlyPerc = os.path.join(self.savePath, 'earlyPerc.txt')
+        savePathLatePerc = os.path.join(self.savePath, 'latePerc.txt')
+        savePathMeanPorEarlyWood = os.path.join(self.savePath, 'meanPorEarlyWood.txt')
+        savePathMeanPorLateWood = os.path.join(self.savePath, 'meanPorLateWood.txt')
+
 
         AVG.to_csv(saveAVGPorosity, sep='\t')
         longPorosityProfileInNaturalValuesDF.to_csv(savePathLongPorosity, sep='\t')
@@ -117,6 +125,13 @@ class PICDens():
         maxPorosityDF.to_csv(savePathMaxPorosity, sep='\t')
         minPorosityDF.to_csv(savePathMinPorosity, sep='\t')
         meanPorosityDF.to_csv(savePathMeanPorosity, sep='\t')
+
+        earlyWidthDF.to_csv(savePathEarlyWidth, sep='\t')
+        lateWidthDF.to_csv(savePathLateWidth, sep='\t')
+        earlyPercDF.to_csv(savePathEarlyPerc, sep='\t')
+        latePercDF.to_csv(savePathLatePerc, sep='\t')
+        meanPorEarlyWoodDF.to_csv(savePathMeanPorEarlyWood, sep='\t')
+        meanPorLateWoodDF.to_csv(savePathMeanPorLateWood, sep='\t')
 
         for path, por in zip((savePathPorosity, savePathNormPorosity, savePathRawPorosity), (treesPorosityDict, normPorosityDict, rawPorosityDict)):
             txtPath = os.path.join(f'{path}/', 'txt')
@@ -273,12 +288,20 @@ class PICDens():
         maximumPorosityDict = {}
         minimumPorosityDict = {}
         meanPorosityDict = {}
+
+        earlyWidthDict = {}
+        lateWidthDict = {}
+        earlyPercDict = {}
+        latePercDict = {}
+        meanPorEarlyWoodDict = {}
+        meanPorLateWoodDict = {}
         for d, n in zip(dirs, sortedNames):
             treeDF = self.scanSubDir(path=d)
             porosityProfilesNaturalValues = self.getPorProfilesNaturalValues(treeDF) # Профили пористости в натуральную величину
             normPorosityProfiles = self.getNormPorosityProfiles(treeDF)
             maxPorosity, minPorosity, meanPorosity = self.getPorosityCharacteristics(treeDF)
             rw = self.getRW(porosityProfilesNaturalValues)
+            earlyWidthList, lateWidthList, earlyPercList, latePercList, meanPorEarlyWoodList, meanPorLateWoodList = self.getEarlyLateWidth(porosityProfilesNaturalValues)
             treeDF = smaDF(treeDF)
 
             rawPorosityDict.update({n: treeDF})
@@ -288,17 +311,40 @@ class PICDens():
             maximumPorosityDict.update({n: maxPorosity})
             minimumPorosityDict.update({n: minPorosity})
             meanPorosityDict.update({n: meanPorosity})
+
+            earlyWidthDict.update({n: earlyWidthList})
+            lateWidthDict.update({n: lateWidthList})
+            earlyPercDict.update({n: earlyPercList})
+            latePercDict.update({n: latePercList})
+            meanPorEarlyWoodDict.update({n: meanPorEarlyWoodList})
+            meanPorLateWoodDict.update({n: meanPorLateWoodList})
+
         
         maximumPorosityDict = pad_dict_list(maximumPorosityDict)
         minimumPorosityDict = pad_dict_list(minimumPorosityDict)
         meanPorosityDict = pad_dict_list(meanPorosityDict)
         rwDict = pad_dict_list(rwDict)
 
+        earlyWidthDict = pad_dict_list(earlyWidthDict)
+        lateWidthDict = pad_dict_list(lateWidthDict)
+        earlyPercDict = pad_dict_list(earlyPercDict)
+        latePercDict = pad_dict_list(latePercDict)
+        meanPorEarlyWoodDict = pad_dict_list(meanPorEarlyWoodDict)
+        meanPorLateWoodDict = pad_dict_list(meanPorLateWoodDict)
+
         rwDF = pd.DataFrame(data=rwDict)
         maxPorosityDF = pd.DataFrame(data=maximumPorosityDict)
         minPorosityDF = pd.DataFrame(data=minimumPorosityDict)
         meanPorosityDF = pd.DataFrame(data=meanPorosityDict)
-        return treesPorosityDict, normPorosityDict, rwDF, maxPorosityDF, minPorosityDF, meanPorosityDF, rawPorosityDict
+
+        earlyWidthDF = pd.DataFrame(data=earlyWidthDict)
+        lateWidthDF = pd.DataFrame(data=lateWidthDict)
+        earlyPercDF = pd.DataFrame(data=earlyPercDict)
+        latePercDF = pd.DataFrame(data=latePercDict)
+        meanPorEarlyWoodDF = pd.DataFrame(data=meanPorEarlyWoodDict)
+        meanPorLateWoodDF = pd.DataFrame(data=meanPorLateWoodDict)
+
+        return treesPorosityDict, normPorosityDict, rwDF, maxPorosityDF, minPorosityDF, meanPorosityDF, rawPorosityDict, earlyWidthDF, lateWidthDF, earlyPercDF, latePercDF, meanPorEarlyWoodDF, meanPorLateWoodDF
     
     def getPorProfilesNaturalValues(self, porosityProfiles: pd.DataFrame) -> pd.DataFrame:
         """
@@ -372,14 +418,16 @@ class PICDens():
         trw = []
         columns = porosityProfiles.columns
         years = sorted(list(map(lambda c: int(c), columns)))
+        maxYear = max(years)
+        minYear = min(years)
         
-        for y in years:
+        for y in range(minYear, self.yearStart+1):
             if y not in columns:
                 trw.append(0)
             else:
                 trw.append(int(porosityProfiles[y].count()))
 
-        trw = list(map(lambda i: int(i), trw))
+        trw = list(map(lambda i: int(i), trw))[::-1]
         return trw
 
     def getPorosityCharacteristics(self, porosityProfiles: pd.DataFrame) -> tuple:
@@ -402,11 +450,14 @@ class PICDens():
 
         columns = porosityProfiles.columns
         years = sorted(list(map(lambda c: int(c), columns)))
+        maxYear = max(years)
+        minYear = min(years)
+        
         maxPorosity = []
         minPorosity = []
         meanPorosity = []
 
-        for y in range(years[0], years[-1]):
+        for y in range(minYear, self.yearStart+1):
             if y not in columns:
                 maxPorosity.append(0)
                 minPorosity.append(0)
@@ -415,9 +466,70 @@ class PICDens():
                 maxPorosity.append(porosityProfiles[y].max())
                 minPorosity.append(porosityProfiles[y].min())
                 meanPorosity.append(porosityProfiles[y].mean())
+        maxPorosity = maxPorosity[::-1]
+        minPorosity = minPorosity[::-1]
+        meanPorosity = meanPorosity[::-1]
 
         return maxPorosity, minPorosity, meanPorosity
 
+    def getEarlyLateWidth(self, porosityProfiles: pd.DataFrame) -> tuple:
+        columns = porosityProfiles.columns
+        years = sorted(list(map(lambda c: int(c), columns)))
+        maxYear = max(years)
+        minYear = min(years)
+
+        earlyWidthList = []
+        lateWidthList = []
+        earlyPercList = []
+        latePercList = []
+
+        meanPorEarlyWoodList = []
+        meanPorLateWoodList = []
+
+        for y in range(minYear, self.yearStart+1):
+            if y not in columns:
+                earlyWidthList.append(0)
+                lateWidthList.append(0)
+                earlyPercList.append(0)
+                latePercList.append(0)
+                meanPorEarlyWoodList.append(0)
+                meanPorLateWoodList.append(0)
+            else:
+                bestMeanVar = 99999999999
+                cleanPor = porosityProfiles[y].dropna()
+
+                meanValue = cleanPor.min()+(cleanPor.max()-cleanPor.min())/2
+                th = 0
+                for i in range(len(cleanPor)-1, 0, -1):
+                    if cleanPor.iloc[i] >= meanValue:
+                        th = i
+                        break
+
+
+                earlyWidth = th
+                lateWidth = len(cleanPor) - earlyWidth
+                earlyPerc = earlyWidth / len(cleanPor)
+                latePerc = 1 - earlyPerc
+
+                meanPorEarlyWood = cleanPor.iloc[:th].mean()
+                meanPorLateWood = cleanPor.iloc[th:].mean()
+
+
+                earlyWidthList.append(earlyWidth)
+                lateWidthList.append(lateWidth)
+                earlyPercList.append(earlyPerc)
+                latePercList.append(latePerc)
+                meanPorEarlyWoodList.append(meanPorEarlyWood)
+                meanPorLateWoodList.append(meanPorLateWood)
+        
+        earlyWidthList = earlyWidthList[::-1]
+        lateWidthList = lateWidthList[::-1]
+        earlyPercList = earlyPercList[::-1]
+        latePercList = latePercList[::-1]
+        meanPorEarlyWoodList = meanPorEarlyWoodList[::-1]
+        meanPorLateWoodList = meanPorLateWoodList[::-1]
+
+        return earlyWidthList, lateWidthList, earlyPercList, latePercList, meanPorEarlyWoodList, meanPorLateWoodList
 
 
     def getNormalisationPorosityProfile(self, porosityProfile: list, convertCoef: float | int) -> list:
@@ -510,7 +622,7 @@ class PICDens():
             imageNumber = int(im.split('.')[0])
             porosityDF = self.scanImg(ip)
             porosityDF['finalPorosityProfile'] = porosityDF.mean(axis=1)
-            porosityByYearsDict.update({self.yearStart-imageNumber: porosityDF['finalPorosityProfile'].tolist()})
+            porosityByYearsDict.update({self.yearStart-imageNumber+1: porosityDF['finalPorosityProfile'].tolist()})
 
         porosityByYearsDict = pad_dict_list(porosityByYearsDict)
         porosityByYearsDF = pd.DataFrame(data=porosityByYearsDict)
@@ -534,13 +646,14 @@ class PICDens():
         porosityProfilesDF : pd.DataFrame
             porosity profiles obtained by scanning several windows      
         """
+
         binaryImage = self.getBinaryImg(imgPath, biMethod=self.biMethod)
         porosityProfilesDict = {}
 
         if windowSize == -1:
             # Если windowSize определен как -1, то сканируем изображение полностью, не разбивая его на окна
             porosityProfileToPix = self.getPorosityProfileToPix(binaryImage)
-            porosityProfilesDict.update({0: porosityProfilePix})
+            porosityProfilesDict.update({0: porosityProfileToPix})
         else:
             windowsNumbers = int((len(binaryImage)//step))-int((windowSize/step))
 
@@ -567,6 +680,7 @@ class PICDens():
         pixPorosityProfile : List
             “Raw” porosity profile. The length of the profile is equal to the length of the photo in pixels        
         """
+        lumWallProfile = []
         pixPorosityProfile = []
         biImg = biImg.transpose()
         xImgSize, yImgSize = biImg.shape
@@ -583,7 +697,7 @@ class PICDens():
         blurType: str='Median', 
         biMethod: str='Otsu', 
         gammaEqualisation: bool=False, 
-        ksize: int=7,
+        ksize: int=3,
         constantTh=235
         ) -> np.ndarray:
         """
@@ -632,6 +746,11 @@ class PICDens():
             biImg = cv2.adaptiveThreshold(img,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY,11,2)
         elif biMethod == 'Gaussian':
             biImg = cv2.adaptiveThreshold(img,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY,11,2)
+        elif biMethod == 'Triangle':
+            thresh = filters.threshold_triangle(img)
+            biImg = img > thresh
+            biImg = biImg.astype(np.uint8) * 255
         else:
             th, biImg = cv2.threshold(img, constantTh, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+
         return biImg
