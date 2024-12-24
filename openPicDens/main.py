@@ -1,4 +1,4 @@
-from app import PICDens
+from .app import PICDens
 
 
 def main():
