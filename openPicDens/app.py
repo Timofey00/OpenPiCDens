@@ -3,19 +3,135 @@ Main App-module
 """
 
 import os
-from statistics import mean, median
+from statistics import mean, median, stdev
 import pathlib
 
 import numpy as np
 import pandas as pd
 import cv2
+import torch
+import math
 
 from .utils import *
+from unet.utills import predictImgMask
+from itertools import groupby
+
+
+class BI:
+    """
+    Parameters
+    ----------
+    imgPath : str
+        path to image
+    blurType: str
+        Choises: Gaussian (default), Median, Normalized Box Filter (NBF), Bilateral
+    biMethod: str
+        Choises: Otsu, Mean, Gaussian, UNET
+    gammaEqualisation: bool
+        if True, the image is gamma-corrected
+    ksize: int
+        Kernel size
+
+    Methods
+    -------
+    binarizationRoot(root: str, saveDir: str) -> None
+    getBinaryImg(imgPath: str) -> np.ndarray
+
+    """
+    def __init__(
+        self,
+        blurType: str = 'Median',  
+        gammaEqualisation: bool = False, 
+        ksize: int = 3,
+        constantTh: int = 235,
+        modelPath: None = None,
+        biMethod: str = 'Otsu'
+        ):
+        self.root = root
+        self.imgPath = imgPath
+        self.blurType = blurType
+        self.gammaEqualisation = gammaEqualisation
+        self.ksize = ksize
+        self.constantTh = constantTh
+        self.biMethod = biMethod
+        
+        if self.biMethod == 'UNET':
+            DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+            self.model = torch.load(modelPath).to(DEVICE)
+
+    def binarizationRoot(self, root: str, saveDir: str) -> None:
+        sortedNames = sorted(os.listdir(root), key=lambda f: int(f))
+        dirs = [os.path.join(root, f'{d}/') for d in sortedNames]
+
+        for d in dirs:
+            imgsList = sorted(os.listdir(d), key=lambda f: int(f.split('.')[0]))    
+            imgsPathList = [os.path.join(d, i) for i in imgsList]
+
+            for i in imgsPathList:
+                biImg = self.getBinaryImg(i)
+                names = i.split('/')
+                savePath = os.path.join(saveDir, names[-2])
+                if not os.path.isdir(savePath):
+                    os.mkdir(savePath, 0o754)
+                savePath = os.path.join(savePath, names[-1])
+                cv2.imwrite(savePath, biImg)
+
+    def getBinaryImg(self, imgPath: str) -> np.ndarray:
+        """
+        Parameters
+        ----------
+        imgPath : str
+            path to image
+
+        converts the image into binary format 
+        (default, using the Otsu method)
+        
+        Returns
+        -------
+        biImg: np.ndarray
+        """
+        img = cv2.imread(imgPath)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+        if self.gammaEqualisation:
+            img = cv2.equalizeHist(img)
+
+        # Choice bluring method
+        if self.blurType == 'Gaussian':
+            img = cv2.GaussianBlur(img, (self.ksize, self.ksize), 0)
+        elif self.blurType == 'Median':
+            img= cv2.medianBlur(img, self.ksize)
+        elif self.blurType == 'NBF':
+            img = cv2.blur(img, (self.ksize, self.ksize)) 
+        elif self.blurType == 'Bilateral':
+            img = cv2.bilateralFilter(img, 11, 41, 21)
+        else:
+            pass
+
+        # Choice thresholding method
+        if self.biMethod == 'Otsu':
+            th, biImg = cv2.threshold(img, 230, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        elif self.biMethod == 'Mean':
+            biImg = cv2.adaptiveThreshold(img,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY,11,2)
+        elif self.biMethod == 'Gaussian':
+            biImg = cv2.adaptiveThreshold(img,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY,11,2)
+        elif self.biMethod == 'Triangle':
+            thresh = filters.threshold_triangle(img)
+            biImg = img > thresh
+            biImg = biImg.astype(np.uint8) * 255
+        elif self.biMethod == 'UNET':
+            biImg = predictImgMask(imgPath=imgPath, saveMaskPath=None, divideSize=128, plotMod=False, model=self.model)
+            biImg = cv2.cvtColor(biImg, cv2.COLOR_RGB2GRAY)
+            th, biImg = cv2.threshold(biImg, 200, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        else:
+            th, biImg = cv2.threshold(img, constantTh, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+
+        return biImg
+
 
 class PICDens():
     """
     A main class of app
-
 
     Attributes
     ----------
@@ -24,7 +140,7 @@ class PICDens():
     root : str
         path to image directory
     pixToMcmCoef : float
-        coefficient for converting porosity length to micrometers
+        coefficient for converting porosity length to micrometers (the default is 1)
     speciesName : str
         species name
     yearStart : int
@@ -32,120 +148,369 @@ class PICDens():
     normNumber : int
         length of normalized porosity profile
     normMethod : str
-        normalization method
+        normalization method (the default is 'median')
+    smaInterval : int
+        smoothing window size (the default is 90)
+    biMethod : str
+    options : list
+
+    usePredBIImgs: bool
+        set this variable to true if you have pre-binarized images (default is False)
+    biImgsPath : str
+        if the variable usePredBIImgs is True, the program uses this path as a source of binarized images. 
+        In other case, this path is used as a directory for saving binarized images
+        (default is False)
+    modelPath : str | bool
+
+    gapValue : int | None
+        the size of the filter gap window. If set to None, the filter is not applied
+        (default is None)
 
     Methods
     -------
-    startScan
-    getLongPorosityProfile(porosityDict: dict, normMethod: str)
-    getNormPorosityDF(porosityDF: pd.DataFrame, normMethod: str="median")
-    scanRoot
-    getPorProfilesNaturalValues(porosityProfiles: pd.DataFrame)
-    getNormPorosityProfiles(porosityProfiles: pd.DataFrame)
-    getRW(self, porosityProfiles: pd.DataFrame)
-    getPorosityCharacteristics(porosityProfiles: pd.DataFrame)
-    getNormalisationPorosityProfile(porosityProfile: list, convertCoef: float | int)
-    scanSubDir(path : str)
-    scanImg(imgPath: str, windowSize: int = 1000, step: int= 200)
-    getPorosityProfileToPix(biImg: np.ndarray)
-    getBinaryImg(imgPath: str, blurType: str='Median', biMethod: str='Otsu', gammaEqualisation: bool=False, ksize: int=7)
+    initPath(path: str) -> str
+    getTreeDirs() -> dict
+    initResDict() -> tuple
+    saveDataToFile(savePath: str, data: pd.DataFrame, fileName: str, ext: str='txt') -> None
+    startScan() -> None
+    scanSubDir(subDir: str, imgsList: list) -> pd.DataFrame
+    getLongPorosityProfile(porosityDict: dict, normMethod: str) -> tuple
+    getNormPorosityDF(porosityDF: pd.DataFrame, normMethod: str="median") -> pd.DataFrame
+    getPorProfilesNaturalValues(porosityProfiles: pd.DataFrame) -> pd.DataFrame
+    getNormPorosityProfiles(porosityProfiles: pd.DataFrame) -> pd.DataFrame
+    getRW(porosityProfiles: pd.DataFrame) -> List
+    getPorosityCharacteristics(porosityProfiles: pd.DataFrame) -> tuple
+    getPorosityCharacteristicsProcentile(porosityProfiles: pd.DataFrame) -> tuple
+    getEarlyLateWidth(porosityProfiles: pd.DataFrame) -> tuple
+    getSectorPorosity(porosityProfiles: pd.DataFrame, sectorsNumber: int=10) -> tuple
+    getNormalisationPorosityProfile(porosityProfile: list, reqLen: int) -> list
+    scanImg(imgPath: str, windowSize: int = 1000, step: int= 200) -> pd.DataFrame
+    getPorosityProfileToPix(biImg: np.ndarray) -> list
+    gapFilter(x: np.array) -> list
     
-
     """
     def __init__(
         self, 
-        savePath,
-        root,
-        speciesName,
-        yearStart,
-        normNumber,
-        pixToMcmCoef = 1,
-        normMethod="median",
-        smaInterval=20,
-        biMethod='Otsu',
-        predBI=None
+        savePath: str,
+        root: str,
+        speciesName: str,
+        yearStart: int,
+        normNumber: int,
+        pixToMcmCoef: float|int = 1,
+        normMethod: str="median",
+        smaInterval: int=90,
+        options: list=['__all__'],
+        gapValue=None,
+        
+        biMethod: str='Otsu',
+        blurType: str = 'Median',  
+        gammaEqualisation: bool = False, 
+        ksize: int = 3,
+        constantTh: int = 235,
+        modelPath: None = None,
+        usePredBIImgs=False,
+        biImgsPath: str=False,
         ):
 
         self.savePath = savePath
         self.root = root
-        self.pixToMcmCoef = pixToMcmCoef
         self.speciesName = speciesName
         self.yearStart = yearStart
         self.normNumber = normNumber
-        self.normMethod="median"
+        self.pixToMcmCoef = pixToMcmCoef
+        self.normMethod = normMethod
         self.smaInterval = smaInterval
-        self.biMethod = biMethod
+        self.options = options
+        self.gapValue = gapValue
 
+        self.biMethod = biMethod
+        self.blurType = blurType
+        self.gammaEqualisation = gammaEqualisation
+        self.ksize = ksize
+        self.constantTh = constantTh
+        self.modelPath = modelPath
+        self.usePredBIImgs = usePredBIImgs
+        self.biImgsPath = biImgsPath
+
+        if self.usePredBIImgs:
+            self.root = self.biImgsPath
 
         # Init save-path
-        if not os.path.isdir(self.savePath):
-            os.mkdir(self.savePath, 0o754)
+        self.areaPorSavePath = os.path.join(self.savePath, 'areaPorosity')
+        self.initPath(self.areaPorSavePath)
+
+    def initPath(self, path: str) -> str:
+        """
+        this method creates the specified directory if it does not exist
+        
+        Parameters
+        ----------
+        path : str
+            init path
+        """
+        path = path.replace('\\', '/')
+        if not os.path.isdir(path):
+            os.mkdir(path, 0o754)
+        return path
 
 
-    def startScan(self) -> tuple:
+    def getTreeDirs(self) -> dict:
+        """
+        this method builds a tree of paths to the images
+        
+        Returns
+        ----------
+        treeDirs : dict
+             image path tree
+        """
+        sortedSubDirNames = sorted(os.listdir(self.root), key=lambda f: int(f))
+        treeDirs = {}
+
+        for d in sortedSubDirNames:
+            subDir = os.path.join(self.root, d)
+            sortedImgNames = sorted(os.listdir(subDir), key=lambda f: int(f.split('.')[0]))
+            treeDirs.update({d : sortedImgNames})
+
+        return treeDirs
+
+    def initResDict(self) -> tuple:
+        """
+        
+        
+        Returns
+        ----------
+        dictsRes : tuple
+        """
+        rwDict = {}
+        maxPorosityDict = {}
+        minPorosityDict = {}
+        meanPorosityDict = {}
+        earlyWidthDict = {}
+        lateWidthDict = {}
+        earlyPercDict = {}
+        latePercDict = {}
+        maxPorosityQDict = {}
+        minPorosityQDict = {}
+        meanPorosityQDict = {}
+        meanPorEarlyWoodDict = {}
+        meanPorLateWoodDict = {}
+
+        treesPorosityDict = {}
+        normPorosityDict = {}
+        sectorsDict = {s: {} for s in range(10)}
+        longPorosityProfile = 0
+        AVG = 0
+
+        oneFileRes = {
+            'rw' : [
+                self.getRW, [rwDict], ['rw']
+            ],
+            'mainPorosityFeatures' : [
+                self.getPorosityCharacteristics, [maxPorosityDict, minPorosityDict, meanPorosityDict],
+                ['maxPorosity', 'minPorosity', 'meanPorosity']
+            ],
+            'earlyLateWoodFeatures' : [
+                self.getEarlyLateWidth, [earlyWidthDict, lateWidthDict, earlyPercDict, latePercDict, meanPorEarlyWoodDict, meanPorLateWoodDict],
+                ['earlyWidth', 'lateWidth', 'earlyPerc', 'latePerc', 'meanPorEarlyWood', 'meanPorLateWood']
+            ],
+            'mainPorosityFeaturesQuantile' : [
+                self.getPorosityCharacteristicsProcentile, [maxPorosityQDict, minPorosityQDict, meanPorosityQDict],
+                ['maxPorosityQ', 'minPorosityQ', 'meanPorosityQ']
+            ],
+        }
+
+        severalFileRes = {
+            'treesPorosity' : [
+                self.getPorProfilesNaturalValues, [treesPorosityDict], ['naturalValuesPorosity']
+            ],
+            'normPorosity' : [
+                self.getNormPorosityProfiles, [normPorosityDict], ['normValuesPorosity']
+            ],
+        }
+        sectorsFileRes = {
+            'sectorsPorosity' : [
+                self.getSectorPorosity, [sectorsDict], ['sectorsPorosity']
+            ]
+        }
+
+        longFileRes = {
+            'annualPorosity' : [
+                self.getLongPorosityProfile, [longPorosityProfile, AVG], ['longNormPorosity', 'AVG']
+            ]
+        }
+
+        if self.options == ['__all__']:
+            return oneFileRes, severalFileRes, sectorsFileRes, longFileRes
+
+    def saveDataToFile(self, savePath: str, data: pd.DataFrame, fileName: str, ext: str='txt', reverse=True) -> None:
         """
         A method for automated scanning of a directory containing images of micrographs of woody plants.
+        Parameters
+        -------
+        savePath : str
+            saving path
+        data: pd.DataFrame
+            dataframe to save
+        fileName : str
+            name of file to save
+        ext : str
+            file extension
+
+        """
+        savePath = os.path.join(savePath, f'{fileName}.{ext}')
+        savePath = savePath.replace('\\', '/')
+        if reverse:
+            data = data[::-1]
+        data.to_csv(savePath, sep='\t')
+
+
+    def startScan(self) -> None:
+        """
+        A method for automated scanning of a directory containing images of micrographs of woody plants
+
+        """
+        
+        treeDirs = self.getTreeDirs()
+        oneFileResDict, severalFileResDict, sectorsFileResDict, longRawResDict = self.initResDict()
+        rawPorosityDict = {}
+
+        for d in treeDirs:
+            subDir = os.path.join(self.root, d)
+            porosityByYearsDF = self.scanSubDir(subDir=subDir, imgsList=treeDirs[d])
+            rawPorosityDict.update({d: porosityByYearsDF})
+
+
+            for opt in oneFileResDict:
+                func = oneFileResDict[opt][0]
+                results = func(porosityByYearsDF)
+
+                for i in range(len(oneFileResDict[opt][1])):
+                    if type(results) is tuple:
+                        oneFileResDict[opt][1][i].update({d : results[i]})
+                    else:
+                        oneFileResDict[opt][1][i].update({d : results})
+
+            for opt in severalFileResDict:
+                func = severalFileResDict[opt][0]
+                results = func(porosityByYearsDF)
+
+                for i in range(len(severalFileResDict[opt][1])):
+                    if type(results) is tuple:
+                        severalFileResDict[opt][1][i].update({d : results[i]})
+                    else:
+                        severalFileResDict[opt][1][i].update({d : results})
+
+            for opt in sectorsFileResDict:
+                func = sectorsFileResDict[opt][0]
+                results = func(porosityByYearsDF)
+
+                for i in range(len(sectorsFileResDict[opt][1])):
+                    for sector in sectorsFileResDict[opt][1][i]:
+                        sectorData = results[sector]
+                        sectorsFileResDict[opt][1][i][sector].update({d : sectorData})
+
+
+        rwlSavePath = os.path.join(self.savePath, 'rwl')
+        for opt in oneFileResDict:
+            # rwlSavePath = os.path.join(self.savePath, 'rwl')
+            if not os.path.isdir(rwlSavePath):
+                os.mkdir(rwlSavePath, 0o754)
+
+            for i in range(len(oneFileResDict[opt][1])):
+                oneFileResDict[opt][1][i] = pad_dict_list(oneFileResDict[opt][1][i])
+                oneFileResDict[opt][1][i] = pd.DataFrame(data=oneFileResDict[opt][1][i])
+                self.saveDataToFile(savePath=self.savePath, data=oneFileResDict[opt][1][i], fileName=oneFileResDict[opt][2][i])
+
+                if oneFileResDict[opt][2][i] in ('rw', 'earlyWidth', 'lateWidth'):
+                    coef = 1
+                else:
+                    coef = 1000
+                rw2rwl(data=oneFileResDict[opt][1][i], fileName=oneFileResDict[opt][2][i], savePath=rwlSavePath, end_year=self.yearStart, coef=coef)
+        
+        for opt in severalFileResDict:
+            for i in range(len(severalFileResDict[opt][1])):
+                for treeN in severalFileResDict[opt][1][i]:
+                    data = severalFileResDict[opt][1][i][treeN]
+                    subDir = severalFileResDict[opt][2][i]
+                    sp = os.path.join(self.savePath, subDir)
+                    self.initPath(sp)
+                    self.saveDataToFile(savePath=sp, data=data, fileName=f'{treeN}')
+
+        for opt in sectorsFileResDict:
+            for i in range(len(sectorsFileResDict[opt][1])):
+                subDir = sectorsFileResDict[opt][2][i]
+                for sector in sectorsFileResDict[opt][1][i]:
+                    data = pad_dict_list(sectorsFileResDict[opt][1][i][sector])
+                    data = pd.DataFrame(data)
+                    sp = os.path.join(self.savePath, subDir)
+                    coef = 1000
+                    self.initPath(sp)
+                    self.saveDataToFile(savePath=sp, data=data, fileName=f'sector_{sector}')
+                    rw2rwl(data=data, fileName=f'sector_{sector}', savePath=rwlSavePath, end_year=self.yearStart, coef=coef)
+
+        for rp in rawPorosityDict:
+            sp = os.path.join(self.savePath, 'rawPorosity')
+            self.initPath(sp)
+            self.saveDataToFile(savePath=sp, data=rawPorosityDict[rp], fileName=rp)
+
+        for opt in longRawResDict:
+            func = longRawResDict[opt][0]
+            results = func(severalFileResDict['normPorosity'][1][0], normMethod='median')
+
+            for r in range(len(results)):
+                fileName = longRawResDict[opt][2][r]
+                self.saveDataToFile(savePath=self.savePath, data=results[r], fileName=fileName)
+
+
+    def scanSubDir(self, subDir: str, imgsList: list) -> pd.DataFrame:
+        """
+        this method scans a directory of wood microstructure images
+        
+        Parameters
+        ----------
+        subDir : str
+            image subdirectory
+        imgsList : list
+            list of images in the directory
 
         Returns
         -------
-        longPorosityProfileInNaturalValuesDF : pd.DataFrame
-            long-term porosity profile in micrometers
-        longPorosityProfileNorm : pd.DataFrame
-            long-term normalized porosity profile
-
+        porosityByYearsDF : pd.DataFrame
+            averaged annualized porosity profiles of one tree 
         """
+        print(f'[INFO] Start scan direction {subDir}')
+        # imgsList = sorted(os.listdir(path), key=lambda f: int(f.split('.')[0]))
         
-        treesPorosityDict, normPorosityDict, rwDF, maxPorosityDF, minPorosityDF, meanPorosityDF, rawPorosityDict, earlyWidthDF, lateWidthDF, earlyPercDF, latePercDF, meanPorEarlyWoodDF, meanPorLateWoodDF = self.scanRoot()
-        longPorosityProfileInNaturalValuesDF, _ = self.getLongPorosityProfile(treesPorosityDict, normMethod=self.normMethod)
-        longPorosityProfileNorm, AVG = self.getLongPorosityProfile(normPorosityDict, normMethod=None)   
-        
-        saveAVGPorosity = os.path.join(self.savePath, 'AVG.txt')
-        savePathLongPorosity = os.path.join(self.savePath, 'longPorosity.txt')
-        savePathLongNormPorosity = os.path.join(self.savePath, 'longNormPorosity.txt')
-        savePathRW = os.path.join(self.savePath, 'rw.txt')
-        savePathMaxPorosity = os.path.join(self.savePath, 'maxPorosity.txt')
-        savePathMinPorosity = os.path.join(self.savePath, 'minPorosity.txt')
-        savePathMeanPorosity = os.path.join(self.savePath, 'meanPorosity.txt')
-        savePathPorosity = os.path.join(self.savePath, 'porosity')
-        savePathNormPorosity = os.path.join(self.savePath, 'normPorosity')
-        savePathRawPorosity = os.path.join(self.savePath, 'rawPorosityData')
+        imgsPathList = [os.path.join(subDir, i) for i in imgsList]
+        porosityByYearsDict = {}
+        areaSDPath = os.path.join(self.areaPorSavePath, subDir.split('/')[-1])
+        self.initPath(areaSDPath)
+        porositySDDict = {}
+        porositySMASDDict = {}
 
-        savePathEarlyWidth = os.path.join(self.savePath, 'earlyWidth.txt')
-        savePathLateWidth = os.path.join(self.savePath, 'lateWidth.txt')
-        savePathEarlyPerc = os.path.join(self.savePath, 'earlyPerc.txt')
-        savePathLatePerc = os.path.join(self.savePath, 'latePerc.txt')
-        savePathMeanPorEarlyWood = os.path.join(self.savePath, 'meanPorEarlyWood.txt')
-        savePathMeanPorLateWood = os.path.join(self.savePath, 'meanPorLateWood.txt')
+        for ip, im in zip(imgsPathList, imgsList):
+            porositySDList = []
+            imageNumber = int(im.split('.')[0])
+            porosityDF = self.scanImg(ip)
+            porosityDF['finalPorosityProfile'] = porosityDF.mean(axis=1)
+
+            porositySDList, detrendSMASDList, porosityDF = self.sdSmooth(porosityDF, im.split('.')[0], areaSDPath)
+            porositySDDict.update({im : porositySDList})
+            porositySMASDDict.update({im : detrendSMASDList})
+            porosityByYearsDict.update({self.yearStart-imageNumber+1: porosityDF['finalPorosityProfile'].tolist()})
 
 
-        AVG.to_csv(saveAVGPorosity, sep='\t')
-        longPorosityProfileInNaturalValuesDF.to_csv(savePathLongPorosity, sep='\t')
-        longPorosityProfileNorm.to_csv(savePathLongNormPorosity, sep='\t')
-        rwDF.to_csv(savePathRW, sep='\t')
-        maxPorosityDF.to_csv(savePathMaxPorosity, sep='\t')
-        minPorosityDF.to_csv(savePathMinPorosity, sep='\t')
-        meanPorosityDF.to_csv(savePathMeanPorosity, sep='\t')
+        porositySDDict = pad_dict_list(porositySDDict)
+        porositySMASDDict = pad_dict_list(porositySMASDDict)
+        porositySD = pd.DataFrame(data=porositySDDict)
+        porositySMASD = pd.DataFrame(data=porositySMASDDict)
+        self.saveDataToFile(data=porositySD, fileName=f'{subDir.split('/')[-1]}_SD', savePath=areaSDPath)
+        self.saveDataToFile(data=porositySMASD, fileName=f'{subDir.split('/')[-1]}_SMASD', savePath=areaSDPath)
 
-        earlyWidthDF.to_csv(savePathEarlyWidth, sep='\t')
-        lateWidthDF.to_csv(savePathLateWidth, sep='\t')
-        earlyPercDF.to_csv(savePathEarlyPerc, sep='\t')
-        latePercDF.to_csv(savePathLatePerc, sep='\t')
-        meanPorEarlyWoodDF.to_csv(savePathMeanPorEarlyWood, sep='\t')
-        meanPorLateWoodDF.to_csv(savePathMeanPorLateWood, sep='\t')
-
-        for path, por in zip((savePathPorosity, savePathNormPorosity, savePathRawPorosity), (treesPorosityDict, normPorosityDict, rawPorosityDict)):
-            txtPath = os.path.join(f'{path}/', 'txt')
-            csvPath = os.path.join(f'{path}/', 'csv')
-            for p in (path, txtPath, csvPath):
-                if not os.path.isdir(p):
-                    os.mkdir(p, 0o754)
-
-            for n in por:
-                por[n].to_csv(os.path.join(f'{txtPath}/', f'{self.speciesName}{n}.txt'), sep='\t')
-                por[n].to_csv(os.path.join(f'{csvPath}/', f'{self.speciesName}{n}.csv'), sep='\t')
-
-        return longPorosityProfileInNaturalValuesDF, longPorosityProfileNorm
-
+        porosityByYearsDict = pad_dict_list(porosityByYearsDict)
+        porosityByYearsDF = pd.DataFrame(data=porosityByYearsDict)
+        porosityByYearsDF = smaDF(porosityByYearsDF, smaInterval=self.smaInterval)
+        return porosityByYearsDF
 
     def getLongPorosityProfile(self, porosityDict: dict, normMethod: str) -> tuple:
         """create a normalized long-term porosity profile
@@ -163,8 +528,6 @@ class PICDens():
             long-term porosity profile
         AVG : pd.DataFrame
             yearly average porosity profiles
-
-
         """
 
         # determine the smallest year in the chronology
@@ -186,7 +549,7 @@ class PICDens():
                     longPorosityDict[y].update({n: clearPorosity})
 
         longPorosityProfilesList = []
-        meansProfilesDict = {}                                            ############################
+        meansProfilesDict = {}
         
         for y in longPorosityDict:
             padPorosity = pad_dict_list(longPorosityDict[y])
@@ -195,11 +558,11 @@ class PICDens():
             if subDF.empty:
                 continue
             normPorosityDF = self.getNormPorosityDF(porosityDF=subDF, normMethod=normMethod)
-            normPorosityDF['MEAN'] = normPorosityDF.mean(axis=1)          ############################
-            meansProfilesDict.update({y: normPorosityDF['MEAN'].tolist()})############################
+            normPorosityDF['MEAN'] = normPorosityDF.mean(axis=1)
+            meansProfilesDict.update({y: normPorosityDF['MEAN'].tolist()})
             longPorosityProfilesList.append(normPorosityDF)
         meansProfilesDict = pad_dict_list(meansProfilesDict)
-        AVG = pd.DataFrame(data=meansProfilesDict)############################
+        AVG = pd.DataFrame(data=meansProfilesDict)
         longPorosityProfilesDF = pd.concat(longPorosityProfilesList)
         return longPorosityProfilesDF, AVG
 
@@ -248,103 +611,11 @@ class PICDens():
         normPorosityDict = {}
         for cp in clearPorosityProfilesDict:
             convertCoef = reqRW/len(clearPorosityProfilesDict[cp])
-            normPorosity = self.getNormalisationPorosityProfile(clearPorosityProfilesDict[cp], convertCoef=convertCoef)
-
-            if len(normPorosity) != reqRW:
-                convertCoef = reqRW/len(normPorosity)
-                normPorosity = self.getNormalisationPorosityProfile(normPorosity, convertCoef=convertCoef)
-            
+            normPorosity = self.getNormalisationPorosityProfile(clearPorosityProfilesDict[cp], reqRW)
             normPorosityDict.update({cp: normPorosity})
 
         normPorosityDF = pd.DataFrame(data=normPorosityDict)
         return normPorosityDF
-
-
-    def scanRoot(self) -> tuple:
-        """determines the porosity profile for all trees in the library, 
-        as well as their other characteristics (TRW, MaxPor, MinPor, MeanPor)
-        
-        Returns
-        -------
-        treesPorosityDict : dict
-        normPorosityDict : dict
-        rwDF : pd.DataFrame
-            annual ring width data (in micrometers)
-        maxPorosityDF : pd.DataFrame
-            yearly maximum porosity data
-        minPorosityDF : pd.DataFrame
-            yearly minimum porosity data
-        meanPorosityDF : pd.DataFrame
-            yearly mean porosity data
-        """
-        
-        sortedNames = sorted(os.listdir(self.root), key=lambda f: int(f))
-        dirs = [os.path.join(self.root, f'{d}/') for d in sortedNames]
-
-        rawPorosityDict = {}
-        treesPorosityDict = {}
-        normPorosityDict = {}
-        rwDict = {}
-        maximumPorosityDict = {}
-        minimumPorosityDict = {}
-        meanPorosityDict = {}
-
-        earlyWidthDict = {}
-        lateWidthDict = {}
-        earlyPercDict = {}
-        latePercDict = {}
-        meanPorEarlyWoodDict = {}
-        meanPorLateWoodDict = {}
-        for d, n in zip(dirs, sortedNames):
-            treeDF = self.scanSubDir(path=d)
-            porosityProfilesNaturalValues = self.getPorProfilesNaturalValues(treeDF) # Профили пористости в натуральную величину
-            normPorosityProfiles = self.getNormPorosityProfiles(treeDF)
-            maxPorosity, minPorosity, meanPorosity = self.getPorosityCharacteristics(treeDF)
-            rw = self.getRW(porosityProfilesNaturalValues)
-            earlyWidthList, lateWidthList, earlyPercList, latePercList, meanPorEarlyWoodList, meanPorLateWoodList = self.getEarlyLateWidth(porosityProfilesNaturalValues)
-            treeDF = smaDF(treeDF)
-
-            rawPorosityDict.update({n: treeDF})
-            treesPorosityDict.update({n: porosityProfilesNaturalValues})
-            normPorosityDict.update({n: normPorosityProfiles})
-            rwDict.update({n: rw})
-            maximumPorosityDict.update({n: maxPorosity})
-            minimumPorosityDict.update({n: minPorosity})
-            meanPorosityDict.update({n: meanPorosity})
-
-            earlyWidthDict.update({n: earlyWidthList})
-            lateWidthDict.update({n: lateWidthList})
-            earlyPercDict.update({n: earlyPercList})
-            latePercDict.update({n: latePercList})
-            meanPorEarlyWoodDict.update({n: meanPorEarlyWoodList})
-            meanPorLateWoodDict.update({n: meanPorLateWoodList})
-
-        
-        maximumPorosityDict = pad_dict_list(maximumPorosityDict)
-        minimumPorosityDict = pad_dict_list(minimumPorosityDict)
-        meanPorosityDict = pad_dict_list(meanPorosityDict)
-        rwDict = pad_dict_list(rwDict)
-
-        earlyWidthDict = pad_dict_list(earlyWidthDict)
-        lateWidthDict = pad_dict_list(lateWidthDict)
-        earlyPercDict = pad_dict_list(earlyPercDict)
-        latePercDict = pad_dict_list(latePercDict)
-        meanPorEarlyWoodDict = pad_dict_list(meanPorEarlyWoodDict)
-        meanPorLateWoodDict = pad_dict_list(meanPorLateWoodDict)
-
-        rwDF = pd.DataFrame(data=rwDict)
-        maxPorosityDF = pd.DataFrame(data=maximumPorosityDict)
-        minPorosityDF = pd.DataFrame(data=minimumPorosityDict)
-        meanPorosityDF = pd.DataFrame(data=meanPorosityDict)
-
-        earlyWidthDF = pd.DataFrame(data=earlyWidthDict)
-        lateWidthDF = pd.DataFrame(data=lateWidthDict)
-        earlyPercDF = pd.DataFrame(data=earlyPercDict)
-        latePercDF = pd.DataFrame(data=latePercDict)
-        meanPorEarlyWoodDF = pd.DataFrame(data=meanPorEarlyWoodDict)
-        meanPorLateWoodDF = pd.DataFrame(data=meanPorLateWoodDict)
-
-        return treesPorosityDict, normPorosityDict, rwDF, maxPorosityDF, minPorosityDF, meanPorosityDF, rawPorosityDict, earlyWidthDF, lateWidthDF, earlyPercDF, latePercDF, meanPorEarlyWoodDF, meanPorLateWoodDF
     
     def getPorProfilesNaturalValues(self, porosityProfiles: pd.DataFrame) -> pd.DataFrame:
         """
@@ -366,7 +637,7 @@ class PICDens():
         for col in porosityProfiles.columns:
             clearPorosity = list(filter(lambda x: str(x) != 'nan', porosityProfiles[col].tolist()))
             # convertCoef = self.normNumber / len(clearPorosity)
-            normPorosity = self.getNormalisationPorosityProfile(clearPorosity, convertCoef=self.pixToMcmCoef)
+            normPorosity = self.getNormalisationPorosityProfile(clearPorosity, len(clearPorosity) * self.pixToMcmCoef)
             PorProfilesNaturalValuesDict.update({col: normPorosity})
 
         PorProfilesNaturalValuesDict = pad_dict_list(PorProfilesNaturalValuesDict)
@@ -392,17 +663,13 @@ class PICDens():
         for col in porosityProfiles.columns:
             clearPorosity = list(filter(lambda x: str(x) != 'nan', porosityProfiles[col].tolist()))
             convertCoef = self.normNumber / len(clearPorosity)
-            normPorosity = self.getNormalisationPorosityProfile(clearPorosity, convertCoef=convertCoef)
-
-            if len(normPorosity) != self.normNumber:
-                convertCoef= self.normNumber / len(normPorosity)
-                normPorosity = self.getNormalisationPorosityProfile(normPorosity, convertCoef=convertCoef)
+            normPorosity = self.getNormalisationPorosityProfile(clearPorosity, self.normNumber)
             normPorosityProfilesDict.update({col: normPorosity})
 
         normPorosityProfilesDF = pd.DataFrame(data=normPorosityProfilesDict)
         return normPorosityProfilesDF
 
-    def getRW(self, porosityProfiles: pd.DataFrame):
+    def getRW(self, porosityProfiles: pd.DataFrame) -> list:
         """return tree ring width chronology
         
         Parameters
@@ -423,9 +690,9 @@ class PICDens():
         
         for y in range(minYear, self.yearStart+1):
             if y not in columns:
-                trw.append(0)
+                trw.append(-1)
             else:
-                trw.append(int(porosityProfiles[y].count()))
+                trw.append(int(porosityProfiles[y].count() * self.pixToMcmCoef)) 
 
         trw = list(map(lambda i: int(i), trw))[::-1]
         return trw
@@ -459,9 +726,9 @@ class PICDens():
 
         for y in range(minYear, self.yearStart+1):
             if y not in columns:
-                maxPorosity.append(0)
-                minPorosity.append(0)
-                meanPorosity.append(0)
+                maxPorosity.append(-1)
+                minPorosity.append(-1)
+                meanPorosity.append(-1)
             else:
                 maxPorosity.append(porosityProfiles[y].max())
                 minPorosity.append(porosityProfiles[y].min())
@@ -471,6 +738,49 @@ class PICDens():
         meanPorosity = meanPorosity[::-1]
 
         return maxPorosity, minPorosity, meanPorosity
+
+
+    def getPorosityCharacteristicsProcentile(self, porosityProfiles: pd.DataFrame) -> tuple:
+        """return max, min and mean porosity profile chronology
+        
+        Parameters
+        ----------
+        porosityProfiles : pd.DataFrame
+            averaged annualized porosity profiles of one tree
+
+        Returns
+        -------
+        maxPorosity : List
+            yearly maximum porosity
+        minPorosity : List
+            yearly minimum porosity
+        meanPorosity : List
+            yearly mean porosity
+        """
+
+        columns = porosityProfiles.columns
+        years = sorted(list(map(lambda c: int(c), columns)))
+        maxYear = max(years)
+        minYear = min(years)
+        
+        maxPorosityQ = []
+        minPorosityQ = []
+        meanPorosityQ = []
+
+        for y in range(minYear, self.yearStart+1):
+            if y not in columns:
+                maxPorosityQ.append(-1)
+                minPorosityQ.append(-1)
+                meanPorosityQ.append(-1)
+            else:
+                maxPorosityQ.append(porosityProfiles[y].quantile(0.95))
+                minPorosityQ.append(porosityProfiles[y].quantile(0.05))
+                meanPorosityQ.append(porosityProfiles[y].quantile(0.5))
+        maxPorosityQ = maxPorosityQ[::-1]
+        minPorosityQ = minPorosityQ[::-1]
+        meanPorosityQ = meanPorosityQ[::-1]
+
+        return maxPorosityQ, minPorosityQ, meanPorosityQ
 
     def getEarlyLateWidth(self, porosityProfiles: pd.DataFrame) -> tuple:
         """return early width, late width, early fraction, late fraction, 
@@ -508,25 +818,44 @@ class PICDens():
 
         meanPorEarlyWoodList = []
         meanPorLateWoodList = []
+        morcList = []
+
+        earlyWidthDict = {}
+        lateWidthDict = {}
+        earlyPercDict = {}
+        latePercDict = {}
+        meanPorEarlyWoodDict = {}
+        meanPorLateWoodDict = {}
 
         for y in range(minYear, self.yearStart+1):
             if y not in columns:
-                earlyWidthList.append(0)
-                lateWidthList.append(0)
-                earlyPercList.append(0)
-                latePercList.append(0)
-                meanPorEarlyWoodList.append(0)
-                meanPorLateWoodList.append(0)
+                earlyWidthList.append(-1)
+                lateWidthList.append(-1)
+                earlyPercList.append(-1)
+                latePercList.append(-1)
+                meanPorEarlyWoodList.append(-1)
+                meanPorLateWoodList.append(-1)
+                morcList.append(-1)
             else:
-                bestMeanVar = 99999999999
                 cleanPor = porosityProfiles[y].dropna()
 
                 meanValue = cleanPor.min()+(cleanPor.max()-cleanPor.min())/2
+                porTh = np.percentile(cleanPor, 75)
                 th = 0
+                bestSTD = 100
+                # rightBorder = int(len(cleanPor)*0.9)
                 for i in range(len(cleanPor)-1, 0, -1):
-                    if cleanPor.iloc[i] >= meanValue:
+                    if cleanPor.iloc[i] >= porTh:
                         th = i
                         break
+                # for  t in range(len(cleanPor)//2, len(cleanPor)-1):
+                #     std1 = stdev(cleanPor[0:t])
+                #     std2 = stdev(cleanPor[t:])
+                #     print(std1)
+                #     meanSTD = (std1 + std2) / 2
+                #     if meanSTD < bestSTD:
+                #         th = t
+                #         bestSTD = meanSTD
 
 
                 earlyWidth = th
@@ -554,16 +883,55 @@ class PICDens():
 
         return earlyWidthList, lateWidthList, earlyPercList, latePercList, meanPorEarlyWoodList, meanPorLateWoodList
 
+    def getSectorPorosity(self, porosityProfiles: pd.DataFrame, sectorsNumber: int=10) -> tuple:
+        """
+        returns the average porosity for each of the sectorsNumber of sectors
+        
+        Parameters
+        ----------
+        porosityProfiles : pd.DataFrame
+            averaged annualized porosity profiles of one tree
+        sectorsNumber : int
+            number of secctors (default=10)
 
-    def getNormalisationPorosityProfile(self, porosityProfile: list, convertCoef: float | int) -> list:
+        Returns
+        -------
+        sectorsList : List
+            list of average porosity by sector
+        """
+        columns = porosityProfiles.columns
+        years = sorted(list(map(lambda c: int(c), columns)))
+        maxYear = max(years)
+        minYear = min(years)
+
+        sectorsList = [[] for i in range(sectorsNumber)]
+        meanPorLateWoodDict = {}
+
+        for y in range(minYear, self.yearStart+1):
+            if y not in columns:
+                for s in range(sectorsNumber):
+                    sectorsList[s].append(-1)
+            else:
+                cleanPor = porosityProfiles[y].dropna()
+                step = len(cleanPor) // sectorsNumber
+                for s in range(sectorsNumber):
+                    sectorPorosity = cleanPor.iloc[step*s : len(cleanPor) - step * (sectorsNumber-1-s)].mean()
+                    sectorsList[s].append(sectorPorosity)
+        for s in range(sectorsNumber):
+            sectorsList[s] = sectorsList[s][::-1]
+
+        return sectorsList
+
+
+    def getNormalisationPorosityProfile(self, porosityProfile: list, reqLen: int) -> list:
         """normalizes the porosity profile along the length in accordance with the conversion coefficient
 
         Parameters
         ----------
         porosityProfile : List
             porosity profile
-        convertCoef : float | int
-            conversion factor for image normalization
+        reqLen : int
+            required porosity profile length
         
         Returns
         -------
@@ -571,85 +939,43 @@ class PICDens():
         """
         normPorosity = []
         lenPorosity = len(porosityProfile)
-        reqLen = mathRound(len(porosityProfile) * convertCoef) + 20
-        convertCoef = reqLen / lenPorosity
         stepped = 0
+        reqLen = int(reqLen)
 
-        if convertCoef < 1:
-            step = 1 / convertCoef
+        if reqLen < lenPorosity:
+            step = lenPorosity // reqLen
+            for s in range(reqLen):
+                sectorPorosity = mean(porosityProfile[step*s : lenPorosity - step * (reqLen-s-1)])
+                normPorosity.append(sectorPorosity)
 
-            while stepped < lenPorosity-step:
-                n = int(round(step, 0))
-                cur_base_index = int(round(stepped, 0))
-                normPorosity.append(sum((porosityProfile[cur_base_index + i] for i in range(n))) / n)
-                stepped += step
+        elif reqLen > lenPorosity:
+            numberPadNums = reqLen - lenPorosity + 10
 
-                if stepped > lenPorosity:
-                    stepped = lenPorosity
+            while numberPadNums:
+                normPorosity = []
+                step = math.ceil(len(porosityProfile) / numberPadNums) if numberPadNums <= len(porosityProfile) // 3 else 3
+                n = step
 
-        elif convertCoef > 1:
-            normPorosity = []
+                while n <= len(porosityProfile):
+                    normPorosity += porosityProfile[n - step: n]
+                    normPorosity += [mean(porosityProfile[n - 3: n])]
 
-            while len(normPorosity) != reqLen:
-                if normPorosity:
-                    porosityProfile = normPorosity
-                    normPorosity = []
-                    lenPorosity = len(porosityProfile)
-                unToAdd = mathRound(reqLen - lenPorosity)
+                    n += step
+                    if n > len(porosityProfile):
+                        normPorosity += porosityProfile[n - step: ]
+                    numberPadNums -= 1
 
-                if unToAdd > lenPorosity:
-                    unToAdd = lenPorosity
+                porosityProfile = normPorosity
 
-                step = lenPorosity / unToAdd
-
-                i = 0
-                stepped = i + step
-
-                for u in range(unToAdd):
-                    normPorosity += porosityProfile[mathRound(i):mathRound(stepped)]
-                    normPorosity += [porosityProfile[mathRound(stepped)-1]]
-
-                    if len(normPorosity) + step > reqLen and len(normPorosity) < reqLen:
-                        normPorosity += porosityProfile[int(len(normPorosity)-reqLen):]
-                        break
-
-                    stepped += step
-                    i += step
+            normPorosity = sma(series=normPorosity, interv=10)
 
         else:
             normPorosity = porosityProfile
-        normPorosity = sma(normPorosity)
 
+        if len(normPorosity) != reqLen:
+            print(reqLen, len(normPorosity))
+            raise Exception('')
         return normPorosity
-
-    def scanSubDir(self, path: str) -> pd.DataFrame:
-        """
-        this method scans a directory of wood microstructure images
-        
-        Parameters
-        ----------
-        path : str
-
-        Returns
-        -------
-        porosityByYearsDF : pd.DataFrame
-            averaged annualized porosity profiles of one tree 
-        """
-        print('scan subdir')
-        imgsList = sorted(os.listdir(path), key=lambda f: int(f.split('.')[0]))
-        
-        imgsPathList = [os.path.join(path, i) for i in imgsList]
-        porosityByYearsDict = {}
-
-        for ip, im in zip(imgsPathList, imgsList):
-            imageNumber = int(im.split('.')[0])
-            porosityDF = self.scanImg(ip)
-            porosityDF['finalPorosityProfile'] = porosityDF.mean(axis=1)
-            porosityByYearsDict.update({self.yearStart-imageNumber+1: porosityDF['finalPorosityProfile'].tolist()})
-
-        porosityByYearsDict = pad_dict_list(porosityByYearsDict)
-        porosityByYearsDF = pd.DataFrame(data=porosityByYearsDict)
-        return porosityByYearsDF
 
     def scanImg(self, imgPath: str, windowSize: int = 1000, step: int= 200) -> pd.DataFrame:
         """
@@ -670,7 +996,21 @@ class PICDens():
             porosity profiles obtained by scanning several windows      
         """
 
-        binaryImage = self.getBinaryImg(imgPath, biMethod=self.biMethod)
+        print(f'[INFO] Scan image {imgPath}')
+        if self.usePredBIImgs:
+            binaryImage = cv2.imread(imgPath)
+            binaryImage = cv2.cvtColor(binaryImage, cv2.COLOR_RGB2GRAY)
+            th, binaryImage = cv2.threshold(binaryImage, 10, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        else:
+            bi = BI(        
+                blurType = self.blurType,  
+                gammaEqualisation = self.gammaEqualisation, 
+                ksize = self.ksize,
+                constantTh = self.constantTh,
+                modelPath = self.modelPath,
+                biMethod = self.biMethod
+                )
+            binaryImage = bi.getBinaryImg(imgPath)
         porosityProfilesDict = {}
 
         if windowSize == -1:
@@ -678,7 +1018,7 @@ class PICDens():
             porosityProfileToPix = self.getPorosityProfileToPix(binaryImage)
             porosityProfilesDict.update({0: porosityProfileToPix})
         else:
-            windowsNumbers = int((len(binaryImage)//step))-int((windowSize/step))
+            windowsNumbers = 5
 
             for i in range(windowsNumbers):
                 biImgFragment = binaryImage[i*step:i*step+windowSize]
@@ -708,72 +1048,84 @@ class PICDens():
         biImg = biImg.transpose()
         xImgSize, yImgSize = biImg.shape
         for x in range(xImgSize):
-            blackPixN = np.sum(biImg[x] == 255)
-            pixPorosityProfile.append(blackPixN / yImgSize)
+            if self.gapValue:
+                xFiltered = self.gapFilter(biImg[x])
+                blackPixN = np.sum(xFiltered == 255)
+                pixPorosityProfile.append(blackPixN / len(xFiltered))
+            else:
+                blackPixN = np.sum(biImg[x] == 255)
+                pixPorosityProfile.append(blackPixN / yImgSize)
 
         return pixPorosityProfile
 
-
-    def getBinaryImg(
-        self,
-        imgPath: str, 
-        blurType: str='Median', 
-        biMethod: str='Otsu', 
-        gammaEqualisation: bool=False, 
-        ksize: int=3,
-        constantTh=235
-        ) -> np.ndarray:
+    def gapFilter(self, x: np.array) -> list:
         """
-        converts the image into binary format 
-        (default, using the Otsu method)
-        
+        this method filters out “gaps” in the scan lines
+
         Parameters
         ----------
-        imgPath : str
-            path to image
-        blurType: str
-            Choises: Gaussian (default), Median, Normalized Box Filter (NBF), Bilateral
-        biMethod: str
-            Choises: Otsu, Mean, Gaussian
-        gammaEqualisation: bool
-            if True, the image is gamma-corrected
-        ksize: int
-            Kernel size
+        x : np.ndarray
+            scan line
 
         Returns
         -------
-        biImg: np.ndarray
+        filteredScanLine : List
+            gapless scanning line
+            
         """
-        img = cv2.imread(imgPath)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        xgroup = [list(g) for k, g in groupby(x)]
+        onDel = []
+        for idx in range(len(xgroup)):
+            if xgroup[idx][0] == 255 and len(xgroup[idx]) > self.gapValue:
+                # input()
+                onDel.append(xgroup[idx])
+                # xgroup = xgroup.remove(xgroup[idx])
+        for od in onDel:
+            xgroup.remove(od)
+        filteredScanLine = []
+        for idx in range(len(xgroup)):
+            filteredScanLine += xgroup[idx]
+        filteredScanLine = np.array(filteredScanLine)
+        return filteredScanLine
 
-        if gammaEqualisation:
-            img = cv2.equalizeHist(img)
+    def sdSmooth(self, porosityDF, nTree, savePath, r=300, step=5, leftBorderPerc=0.1, rightBorderPerc=0.3):
+        """
+        
+        Parameters
+        ----------
 
-        # Choice bluring method
-        if blurType == 'Gaussian':
-            img = cv2.GaussianBlur(img, (ksize, ksize), 0)
-        elif blurType == 'Median':
-            img= cv2.medianBlur(img, ksize)
-        elif blurType == 'NBF':
-            img = cv2.blur(img, (ksize, ksize)) 
-        elif blurType == 'Bilateral':
-            img = cv2.bilateralFilter(img, 11, 41, 21)
-        else:
-            pass
 
-        # Choice thresholding method
-        if biMethod == 'Otsu':
-            th, biImg = cv2.threshold(img, 230, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-        elif biMethod == 'Mean':
-            biImg = cv2.adaptiveThreshold(img,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY,11,2)
-        elif biMethod == 'Gaussian':
-            biImg = cv2.adaptiveThreshold(img,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY,11,2)
-        elif biMethod == 'Triangle':
-            thresh = filters.threshold_triangle(img)
-            biImg = img > thresh
-            biImg = biImg.astype(np.uint8) * 255
-        else:
-            th, biImg = cv2.threshold(img, constantTh, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        Returns
+        -------
 
-        return biImg
+        """
+        porositySDList = []
+        detrendSMASDList = []
+        detrendDf = pd.DataFrame({0: []})
+        detrendSMA = pd.DataFrame({0: []})
+
+
+        for i in range(5, r+1, step):
+            if len(porosityDF['finalPorosityProfile'].dropna()) < i:
+                break
+
+            porosityDF[f'smooth_{i}'] = porosityDF['finalPorosityProfile'].rolling(i).mean()
+            porosityDF[f'smooth_{i}'] = porosityDF[f'smooth_{i}'].shift(periods=-i//2)
+
+            leftBorder = int(len(porosityDF[f'smooth_{i}'].dropna())*leftBorderPerc)
+            rightBorder = int(len(porosityDF[f'smooth_{i}'].dropna())*rightBorderPerc)
+
+            porositySDList.append(porosityDF[f'smooth_{i}'][leftBorder: rightBorder].std())
+
+            detrendDf[f'detrend_{i}'] = porosityDF['finalPorosityProfile'] - porosityDF[f'smooth_{i}']
+
+        if 'detrend_150' in detrendDf.columns:
+            detrendSMASDList.append(detrendDf['detrend_150'].std())
+            for i in range(0, 300, step):
+                detrendSMA[i] = detrendDf['detrend_150'].rolling(i).mean()
+                detrendSMA[i] = detrendSMA[i].shift(periods=-i//2)
+                detrendSMASDList.append(detrendSMA[i].std())
+
+        self.saveDataToFile(data=porosityDF, fileName=f'sd_{nTree}', savePath=savePath)
+        self.saveDataToFile(data=detrendDf, fileName=f'detrend_{nTree}', savePath=savePath)
+        return porositySDList, detrendSMASDList, porosityDF
