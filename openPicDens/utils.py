@@ -6,8 +6,7 @@ import numpy as np
 import pandas as pd
 import os
 from math import floor
-from scipy import signal
-from scipy import stats 
+from scipy.interpolate import interp1d
 
 def pad_dict_list(dict_list: dict, padel=np.nan) -> dict:
     """
@@ -145,6 +144,31 @@ def rw2rwl(data : pd.DataFrame, savePath: str, fileName: str, end_year: int=2022
         f.write(rwl_text)
         f.close()
     return rwl_text
+
+
+def getNormalisationPorosityProfile(porosityProfile: list, reqLen: int, interpolationtype='cubic') -> list:
+    """normalizes the porosity profile along the length in accordance with the conversion coefficient
+
+    Parameters
+    ----------
+    porosityProfile : List
+        porosity profile
+    reqLen : int
+        required porosity profile length
+    
+    Returns
+    -------
+    normProfile : List
+    """
+
+    original_length = len(porosityProfile)
+    x_old = np.linspace(0, 1, original_length)
+    x_new = np.linspace(0, 1, reqLen)
+
+    f = interp1d(x_old, porosityProfile, kind=interpolationtype)  # Можно попробовать 'cubic' для сглаживания
+    normProfile = list(f(x_new))
+
+    return normProfile
 
 
 

@@ -11,6 +11,7 @@ import pandas as pd
 import cv2
 import torch
 import math
+from scipy.interpolate import interp1d
 
 from .utils import *
 from unet.utills import predictImgMask
@@ -47,8 +48,8 @@ class BI:
         modelPath: None = None,
         biMethod: str = 'Otsu'
         ):
-        self.root = root
-        self.imgPath = imgPath
+        # self.root = root
+        # self.imgPath = imgPath
         self.blurType = blurType
         self.gammaEqualisation = gammaEqualisation
         self.ksize = ksize
@@ -120,7 +121,7 @@ class BI:
             biImg = img > thresh
             biImg = biImg.astype(np.uint8) * 255
         elif self.biMethod == 'UNET':
-            biImg = predictImgMask(imgPath=imgPath, saveMaskPath=None, divideSize=128, plotMod=False, model=self.model)
+            biImg = predictImgMask(imgPath=imgPath, saveMaskPath=None, divideSize=128, model=self.model)
             biImg = cv2.cvtColor(biImg, cv2.COLOR_RGB2GRAY)
             th, biImg = cv2.threshold(biImg, 200, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         else:
@@ -183,7 +184,6 @@ class PICDens():
     getPorosityCharacteristicsProcentile(porosityProfiles: pd.DataFrame) -> tuple
     getEarlyLateWidth(porosityProfiles: pd.DataFrame) -> tuple
     getSectorPorosity(porosityProfiles: pd.DataFrame, sectorsNumber: int=10) -> tuple
-    getNormalisationPorosityProfile(porosityProfile: list, reqLen: int) -> list
     scanImg(imgPath: str, windowSize: int = 1000, step: int= 200) -> pd.DataFrame
     getPorosityProfileToPix(biImg: np.ndarray) -> list
     gapFilter(x: np.array) -> list
@@ -238,6 +238,20 @@ class PICDens():
         # Init save-path
         self.areaPorSavePath = os.path.join(self.savePath, 'areaPorosity')
         self.initPath(self.areaPorSavePath)
+
+        self.saveConfigFile()
+
+
+    def saveConfigFile(self):
+        config = pd.Series(data={
+            'savePath': self.savePath,
+            'root': self.root,
+            'speciesName': self.speciesName,
+            'start year': self.yearStart,
+            'value of gap': self.gapValue,
+            'SMA window': self.smaInterval
+        }, index = ['savePath', 'root', 'speciesName', 'start year', 'value of gap', 'SMA window'])
+        config.to_csv(os.path.join(self.savePath, 'config.txt'), sep='\t')
 
     def initPath(self, path: str) -> str:
         """
@@ -377,12 +391,13 @@ class PICDens():
         for d in treeDirs:
             subDir = os.path.join(self.root, d)
             porosityByYearsDF = self.scanSubDir(subDir=subDir, imgsList=treeDirs[d])
+            porosityByYearsSMADF = smaDF(porosityByYearsDF, smaInterval=self.smaInterval)
             rawPorosityDict.update({d: porosityByYearsDF})
 
 
             for opt in oneFileResDict:
                 func = oneFileResDict[opt][0]
-                results = func(porosityByYearsDF)
+                results = func(porosityByYearsDF) if opt == 'rw' else func(porosityByYearsSMADF)
 
                 for i in range(len(oneFileResDict[opt][1])):
                     if type(results) is tuple:
@@ -392,7 +407,7 @@ class PICDens():
 
             for opt in severalFileResDict:
                 func = severalFileResDict[opt][0]
-                results = func(porosityByYearsDF)
+                results = func(porosityByYearsSMADF)
 
                 for i in range(len(severalFileResDict[opt][1])):
                     if type(results) is tuple:
@@ -402,7 +417,7 @@ class PICDens():
 
             for opt in sectorsFileResDict:
                 func = sectorsFileResDict[opt][0]
-                results = func(porosityByYearsDF)
+                results = func(porosityByYearsSMADF)
 
                 for i in range(len(sectorsFileResDict[opt][1])):
                     for sector in sectorsFileResDict[opt][1][i]:
@@ -412,7 +427,6 @@ class PICDens():
 
         rwlSavePath = os.path.join(self.savePath, 'rwl')
         for opt in oneFileResDict:
-            # rwlSavePath = os.path.join(self.savePath, 'rwl')
             if not os.path.isdir(rwlSavePath):
                 os.mkdir(rwlSavePath, 0o754)
 
@@ -479,7 +493,6 @@ class PICDens():
             averaged annualized porosity profiles of one tree 
         """
         print(f'[INFO] Start scan direction {subDir}')
-        # imgsList = sorted(os.listdir(path), key=lambda f: int(f.split('.')[0]))
         
         imgsPathList = [os.path.join(subDir, i) for i in imgsList]
         porosityByYearsDict = {}
@@ -509,7 +522,6 @@ class PICDens():
 
         porosityByYearsDict = pad_dict_list(porosityByYearsDict)
         porosityByYearsDF = pd.DataFrame(data=porosityByYearsDict)
-        porosityByYearsDF = smaDF(porosityByYearsDF, smaInterval=self.smaInterval)
         return porosityByYearsDF
 
     def getLongPorosityProfile(self, porosityDict: dict, normMethod: str) -> tuple:
@@ -611,7 +623,7 @@ class PICDens():
         normPorosityDict = {}
         for cp in clearPorosityProfilesDict:
             convertCoef = reqRW/len(clearPorosityProfilesDict[cp])
-            normPorosity = self.getNormalisationPorosityProfile(clearPorosityProfilesDict[cp], reqRW)
+            normPorosity = getNormalisationPorosityProfile(clearPorosityProfilesDict[cp], reqRW)
             normPorosityDict.update({cp: normPorosity})
 
         normPorosityDF = pd.DataFrame(data=normPorosityDict)
@@ -636,8 +648,8 @@ class PICDens():
 
         for col in porosityProfiles.columns:
             clearPorosity = list(filter(lambda x: str(x) != 'nan', porosityProfiles[col].tolist()))
-            # convertCoef = self.normNumber / len(clearPorosity)
-            normPorosity = self.getNormalisationPorosityProfile(clearPorosity, len(clearPorosity) * self.pixToMcmCoef)
+            reqRW = mathRound(len(clearPorosity) * self.pixToMcmCoef)
+            normPorosity = getNormalisationPorosityProfile(clearPorosity, reqRW)
             PorProfilesNaturalValuesDict.update({col: normPorosity})
 
         PorProfilesNaturalValuesDict = pad_dict_list(PorProfilesNaturalValuesDict)
@@ -663,7 +675,7 @@ class PICDens():
         for col in porosityProfiles.columns:
             clearPorosity = list(filter(lambda x: str(x) != 'nan', porosityProfiles[col].tolist()))
             convertCoef = self.normNumber / len(clearPorosity)
-            normPorosity = self.getNormalisationPorosityProfile(clearPorosity, self.normNumber)
+            normPorosity = getNormalisationPorosityProfile(clearPorosity, self.normNumber)
             normPorosityProfilesDict.update({col: normPorosity})
 
         normPorosityProfilesDF = pd.DataFrame(data=normPorosityProfilesDict)
@@ -730,9 +742,16 @@ class PICDens():
                 minPorosity.append(-1)
                 meanPorosity.append(-1)
             else:
+                if len(porosityProfiles[y].dropna()) == 0:
+                    maxPorosity.append(-1)
+                    minPorosity.append(-1)
+                    meanPorosity.append(-1)
+                    continue
+
                 maxPorosity.append(porosityProfiles[y].max())
                 minPorosity.append(porosityProfiles[y].min())
                 meanPorosity.append(porosityProfiles[y].mean())
+
         maxPorosity = maxPorosity[::-1]
         minPorosity = minPorosity[::-1]
         meanPorosity = meanPorosity[::-1]
@@ -773,6 +792,12 @@ class PICDens():
                 minPorosityQ.append(-1)
                 meanPorosityQ.append(-1)
             else:
+                if len(porosityProfiles[y].dropna()) == 0:
+                    maxPorosityQ.append(-1)
+                    minPorosityQ.append(-1)
+                    meanPorosityQ.append(-1)
+                    continue
+
                 maxPorosityQ.append(porosityProfiles[y].quantile(0.95))
                 minPorosityQ.append(porosityProfiles[y].quantile(0.05))
                 meanPorosityQ.append(porosityProfiles[y].quantile(0.5))
@@ -837,6 +862,16 @@ class PICDens():
                 meanPorLateWoodList.append(-1)
                 morcList.append(-1)
             else:
+                if len(porosityProfiles[y].dropna()) == 0:
+                    earlyWidthList.append(-1)
+                    lateWidthList.append(-1)
+                    earlyPercList.append(-1)
+                    latePercList.append(-1)
+                    meanPorEarlyWoodList.append(-1)
+                    meanPorLateWoodList.append(-1)
+                    morcList.append(-1)
+                    continue
+
                 cleanPor = porosityProfiles[y].dropna()
 
                 meanValue = cleanPor.min()+(cleanPor.max()-cleanPor.min())/2
@@ -848,15 +883,6 @@ class PICDens():
                     if cleanPor.iloc[i] >= porTh:
                         th = i
                         break
-                # for  t in range(len(cleanPor)//2, len(cleanPor)-1):
-                #     std1 = stdev(cleanPor[0:t])
-                #     std2 = stdev(cleanPor[t:])
-                #     print(std1)
-                #     meanSTD = (std1 + std2) / 2
-                #     if meanSTD < bestSTD:
-                #         th = t
-                #         bestSTD = meanSTD
-
 
                 earlyWidth = th
                 lateWidth = len(cleanPor) - earlyWidth
@@ -912,6 +938,10 @@ class PICDens():
                 for s in range(sectorsNumber):
                     sectorsList[s].append(-1)
             else:
+                if len(porosityProfiles[y].dropna()) == 0:
+                    sectorsList[s].append(-1)
+                    continue
+                    
                 cleanPor = porosityProfiles[y].dropna()
                 step = len(cleanPor) // sectorsNumber
                 for s in range(sectorsNumber):
@@ -922,62 +952,7 @@ class PICDens():
 
         return sectorsList
 
-
-    def getNormalisationPorosityProfile(self, porosityProfile: list, reqLen: int) -> list:
-        """normalizes the porosity profile along the length in accordance with the conversion coefficient
-
-        Parameters
-        ----------
-        porosityProfile : List
-            porosity profile
-        reqLen : int
-            required porosity profile length
-        
-        Returns
-        -------
-        normPorosity : List
-        """
-        normPorosity = []
-        lenPorosity = len(porosityProfile)
-        stepped = 0
-        reqLen = int(reqLen)
-
-        if reqLen < lenPorosity:
-            step = lenPorosity // reqLen
-            for s in range(reqLen):
-                sectorPorosity = mean(porosityProfile[step*s : lenPorosity - step * (reqLen-s-1)])
-                normPorosity.append(sectorPorosity)
-
-        elif reqLen > lenPorosity:
-            numberPadNums = reqLen - lenPorosity + 10
-
-            while numberPadNums:
-                normPorosity = []
-                step = math.ceil(len(porosityProfile) / numberPadNums) if numberPadNums <= len(porosityProfile) // 3 else 3
-                n = step
-
-                while n <= len(porosityProfile):
-                    normPorosity += porosityProfile[n - step: n]
-                    normPorosity += [mean(porosityProfile[n - 3: n])]
-
-                    n += step
-                    if n > len(porosityProfile):
-                        normPorosity += porosityProfile[n - step: ]
-                    numberPadNums -= 1
-
-                porosityProfile = normPorosity
-
-            normPorosity = sma(series=normPorosity, interv=10)
-
-        else:
-            normPorosity = porosityProfile
-
-        if len(normPorosity) != reqLen:
-            print(reqLen, len(normPorosity))
-            raise Exception('')
-        return normPorosity
-
-    def scanImg(self, imgPath: str, windowSize: int = 1000, step: int= 200) -> pd.DataFrame:
+    def scanImg(self, imgPath: str, windowSize: int = 1000, step: int= 200, windowsNumbers:int = 5) -> pd.DataFrame:
         """
         scans the image with a movable window that moves in “step” increments
 
@@ -1018,8 +993,6 @@ class PICDens():
             porosityProfileToPix = self.getPorosityProfileToPix(binaryImage)
             porosityProfilesDict.update({0: porosityProfileToPix})
         else:
-            windowsNumbers = 5
-
             for i in range(windowsNumbers):
                 biImgFragment = binaryImage[i*step:i*step+windowSize]
                 porosityProfilePix = self.getPorosityProfileToPix(biImgFragment)
@@ -1050,11 +1023,11 @@ class PICDens():
         for x in range(xImgSize):
             if self.gapValue:
                 xFiltered = self.gapFilter(biImg[x])
-                blackPixN = np.sum(xFiltered == 255)
-                pixPorosityProfile.append(blackPixN / len(xFiltered))
+                whitePixN = np.sum(xFiltered == 255)
+                pixPorosityProfile.append(whitePixN / len(xFiltered))
             else:
-                blackPixN = np.sum(biImg[x] == 255)
-                pixPorosityProfile.append(blackPixN / yImgSize)
+                whitePixN = np.sum(biImg[x] == 255)
+                pixPorosityProfile.append(whitePixN / yImgSize)
 
         return pixPorosityProfile
 
@@ -1077,9 +1050,7 @@ class PICDens():
         onDel = []
         for idx in range(len(xgroup)):
             if xgroup[idx][0] == 255 and len(xgroup[idx]) > self.gapValue:
-                # input()
                 onDel.append(xgroup[idx])
-                # xgroup = xgroup.remove(xgroup[idx])
         for od in onDel:
             xgroup.remove(od)
         filteredScanLine = []
@@ -1119,7 +1090,7 @@ class PICDens():
 
             detrendDf[f'detrend_{i}'] = porosityDF['finalPorosityProfile'] - porosityDF[f'smooth_{i}']
 
-        if 'detrend_150' in detrendDf.columns:
+        if 'detrend_300' in detrendDf.columns:
             detrendSMASDList.append(detrendDf['detrend_150'].std())
             for i in range(0, 300, step):
                 detrendSMA[i] = detrendDf['detrend_150'].rolling(i).mean()
