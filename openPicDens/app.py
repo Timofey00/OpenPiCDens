@@ -648,8 +648,11 @@ class PICDens():
 
         for col in porosityProfiles.columns:
             clearPorosity = list(filter(lambda x: str(x) != 'nan', porosityProfiles[col].tolist()))
-            reqRW = mathRound(len(clearPorosity) * self.pixToMcmCoef)
-            normPorosity = getNormalisationPorosityProfile(clearPorosity, reqRW)
+            if len(clearPorosity) < 5:
+                normPorosity = [0 for i in range(self.normNumber)]
+            else:
+                reqRW = mathRound(len(clearPorosity) * self.pixToMcmCoef)
+                normPorosity = getNormalisationPorosityProfile(clearPorosity, reqRW)
             PorProfilesNaturalValuesDict.update({col: normPorosity})
 
         PorProfilesNaturalValuesDict = pad_dict_list(PorProfilesNaturalValuesDict)
@@ -674,8 +677,10 @@ class PICDens():
 
         for col in porosityProfiles.columns:
             clearPorosity = list(filter(lambda x: str(x) != 'nan', porosityProfiles[col].tolist()))
-            convertCoef = self.normNumber / len(clearPorosity)
-            normPorosity = getNormalisationPorosityProfile(clearPorosity, self.normNumber)
+            if len(clearPorosity) < 5:
+                normPorosity = [0 for i in range(self.normNumber)]
+            else:
+                normPorosity = getNormalisationPorosityProfile(clearPorosity, self.normNumber)
             normPorosityProfilesDict.update({col: normPorosity})
 
         normPorosityProfilesDF = pd.DataFrame(data=normPorosityProfilesDict)
