@@ -48,8 +48,7 @@ class BI:
         modelPath: None = None,
         biMethod: str = 'Otsu'
         ):
-        # self.root = root
-        # self.imgPath = imgPath
+
         self.blurType = blurType
         self.gammaEqualisation = gammaEqualisation
         self.ksize = ksize
@@ -251,7 +250,7 @@ class PICDens():
             'value of gap': self.gapValue,
             'SMA window': self.smaInterval
         }, index = ['savePath', 'root', 'speciesName', 'start year', 'value of gap', 'SMA window'])
-        config.to_csv(os.path.join(self.savePath, 'config.txt'), sep='\t')
+        saveDFasTXT(data=config, filePath=os.path.join(self.savePath, 'config.txt'), sep='\t')
 
     def initPath(self, path: str) -> str:
         """
@@ -375,7 +374,8 @@ class PICDens():
         savePath = savePath.replace('\\', '/')
         if reverse:
             data = data[::-1]
-        data.to_csv(savePath, sep='\t')
+        
+        saveDFasTXT(data=data, filePath=savePath, sep='\t')
 
 
     def startScan(self) -> None:

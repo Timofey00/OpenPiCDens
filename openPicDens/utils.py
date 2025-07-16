@@ -170,5 +170,32 @@ def getNormalisationPorosityProfile(porosityProfile: list, reqLen: int, interpol
 
     return normProfile
 
+def openFileAsDF(filePath: str, sep: str='\t'):
+    """
+
+    Parameters
+    ----------
+    filePath : List
+        porosity profile
+    
+    Returns
+    -------
+    normProfile : List
+    """
+    data = pd.read_csv(filePath, sep=sep)
+
+    return data
+
+def saveDFasTXT(data: pd.DataFrame, filePath: str, sep: str='\t'):
+    data.to_csv(filePath, sep=sep)
+
+def saveListasTXT(data: list, filePath: str, colName: str='x', sep: str='\t'):
+    data = pd.DataFrame({colName: data})
+    saveDFasTXT(data=data, filePath=filePath, sep=sep)
+
+def createDirIfNotExist(direct: str):
+    if not os.path.isdir(direct):
+        os.mkdir(direct, 0o754)
+
 
 
