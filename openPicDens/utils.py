@@ -186,16 +186,107 @@ def openFileAsDF(filePath: str, sep: str='\t'):
 
     return data
 
-def saveDFasTXT(data: pd.DataFrame, filePath: str, sep: str='\t'):
+def saveDFasTXT(data: pd.DataFrame, filePath: str, sep: str='\t') -> None:
+    """
+    Save DataFrame to save path
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Saved data
+    filePath : str
+        save path
+    sep : str
+        separator
+        
+    """
+
     data.to_csv(filePath, sep=sep)
 
-def saveListasTXT(data: list, filePath: str, colName: str='x', sep: str='\t'):
+def saveListasTXT(data: list, filePath: str, colName: str='x', sep: str='\t') -> None:
+    """
+    Save list as DataFrame to save path
+
+    Parameters
+    ----------
+    data : list
+        Saved data
+    filePath : str
+        save path
+    colName : str
+        name of culumn
+    sep : str
+        separator
+        
+    """
+
     data = pd.DataFrame({colName: data})
     saveDFasTXT(data=data, filePath=filePath, sep=sep)
 
-def createDirIfNotExist(direct: str):
-    if not os.path.isdir(direct):
-        os.mkdir(direct, 0o754)
+def initPath(path: str) -> None:
+    """
+    Create path, if not exist
 
+    Parameters
+    ----------
+    path : str
+        Path  
+    """
 
+    if not os.path.isdir(path):
+        os.mkdir(path, 0o754)
 
+def initDirTree(root: str, dirs: dict) -> None:
+    """
+    Create paths from "tree of directory".
+    The tree must have the format:
+        {
+            'dir_1':
+                [
+                'sub_1_dir_1',
+                'sub_1_dir_2',
+                'sub_1_dir_3',
+                    ...
+                ],
+            'dir_2':
+                [
+                'sub_1_dir_1',
+                'sub_1_dir_2',
+                {
+                    'sub_1_dir_3':
+                        [
+                        'sub_2_dir_1',
+                        'sub_2_dir_2'
+                        ]
+                }
+                    ...
+                ],
+            'dir_1':
+                {
+                    'sub_1_dir_1':
+                        [
+                        'sub_2_dir_1',
+                        'sub_2_dir_2'
+                        ]
+                }
+        }
+
+    Parameters
+    ----------
+    root : str
+        root of save path
+    dirs : dirt
+        tree of dirs
+        
+    """
+
+    for d in dirs:
+        subPath = os.path.join(root, d)
+        initPath(path=subPath)
+
+        for subDir in dirs[d]:
+            if type(subDir) is dict:
+                initDirTree(root=subPath, dirs=subDir)
+                continue
+
+            initPath(path=os.path.join(subPath, subDir))
