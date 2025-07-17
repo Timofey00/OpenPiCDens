@@ -279,6 +279,7 @@ def initDirTree(root: str, dirs: dict) -> None:
         tree of dirs
         
     """
+    initPath(path=root)
 
     for d in dirs:
         subPath = os.path.join(root, d)
@@ -290,3 +291,35 @@ def initDirTree(root: str, dirs: dict) -> None:
                 continue
 
             initPath(path=os.path.join(subPath, subDir))
+
+
+def initResultsPathsFromImages(root: str, treesPath: str) -> None:
+    """
+    Create paths for results based on directories with photos of pictures
+
+    Parameters
+    ----------
+    root : str
+        Path
+    treesPath: str
+        path to the directory with micrographs
+
+    """
+
+
+    treesList = sorted(os.listdir(treesPath))
+
+    dirTree = {}
+    dirTree.update({'areaPorosity': treesList})
+    dirTree.update({'naturalValuesPorosity': []})
+    dirTree.update({'normValuesPorosity': []})
+    dirTree.update({'rawPorosity': []})
+    dirTree.update({'rwl': [
+        'EW', 'EWPOR', 'LWPOR', 'maxPorosity', 'maxPorosityQ',
+        'meanPorosity', 'meanPorosityQ', 'minPorosity',
+        'minPorosityQ', 'sectors'
+        ]})
+    dirTree.update({'sectorsPorosity': []})
+
+
+    initDirTree(root=root, dirs=dirTree)
