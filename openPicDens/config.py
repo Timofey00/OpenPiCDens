@@ -38,18 +38,18 @@ SAVE_NAMES = {
 
 SAVE_RWL_NAMES = {
 	"rw": f"rw.{saveRWLExt}",
-	"max": f"maxPorosity.{saveExt}",
-	"mean": f"meanPorosity.{saveExt}",
-	"min": f"minPorosity.{saveExt}",
-	"minQ": f"minPorosityQ.{saveExt}",
-	"maxQ": f"maxPorosityQ.{saveExt}",
-	"meanQ": f"meaPorosityQ.{saveExt}",
-	"lw": f"eww.{saveExt}",
-	"ew": f"lww.{saveExt}",
-	"lwpr": f"lwPerc.{saveExt}",
-	"ewpr": f"ewPerc.{saveExt}",
-	"ewp": f"ewPorosity.{saveExt}",
-	"lwp": f"lwPorosity.{saveExt}",
+	"max": f"maxPorosity.{saveRWLExt}",
+	"mean": f"meanPorosity.{saveRWLExt}",
+	"min": f"minPorosity.{saveRWLExt}",
+	"minQ": f"minPorosityQ.{saveRWLExt}",
+	"maxQ": f"maxPorosityQ.{saveRWLExt}",
+	"meanQ": f"meaPorosityQ.{saveRWLExt}",
+	"lw": f"eww.{saveRWLExt}",
+	"ew": f"lww.{saveRWLExt}",
+	"lwpr": f"lwPerc.{saveRWLExt}",
+	"ewpr": f"ewPerc.{saveRWLExt}",
+	"ewp": f"ewPorosity.{saveRWLExt}",
+	"lwp": f"lwPorosity.{saveRWLExt}",
 }
 
 SAVE_NAMES.update({sec: f"sector_{sec}.{saveExt}" for sec in range(sectorPorosityNumber)})

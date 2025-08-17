@@ -84,7 +84,7 @@ def smaDF(df: pd.DataFrame, smaInterval) -> pd.DataFrame:
     smaDF = pd.DataFrame(newDict)
     return smaDF
 
-def rw2rwl(data : pd.DataFrame, savePath: str, fileName: str, end_year: int=2022, coef=1) -> str:
+def rw2rwl(data : pd.DataFrame, savePath: str, end_year: int=2022, coef=1) -> str:
     """
     saves the dataFrame in rwl format
 
@@ -107,8 +107,8 @@ def rw2rwl(data : pd.DataFrame, savePath: str, fileName: str, end_year: int=2022
         rwl data
     """
     ext = '.rwl'
-    fileName = fileName + ext
-    savePath = os.path.join(savePath, fileName).replace('\\', '/')
+    # fileName = fileName + ext
+    # savePath = os.path.join(savePath, fileName).replace('\\', '/')
     # print(savePath)
     data = data * coef
     data = data.replace(-1000, -1)
@@ -311,9 +311,10 @@ def initResultsPathsFromImages(root: str, treesPath: str) -> None:
 
     dirTree = {}
     dirTree.update({'areaPorosity': treesList})
+    dirTree.update({'rawPorosity': treesList})
     dirTree.update({'naturalValuesPorosity': []})
     dirTree.update({'normValuesPorosity': []})
-    dirTree.update({'rawPorosity': []})
+    # dirTree.update({'rawPorosity': []})
     dirTree.update({'rwl': [
         'EW', 'EWPOR', 'LWPOR', 'maxPorosity', 'maxPorosityQ',
         'meanPorosity', 'meanPorosityQ', 'minPorosity',
@@ -323,3 +324,22 @@ def initResultsPathsFromImages(root: str, treesPath: str) -> None:
 
 
     initDirTree(root=root, dirs=dirTree)
+
+def getTreeDirs(treesPath: str) -> dict:
+    """
+    this method builds a tree of paths to the images
+    
+    Returns
+    ----------
+    treeDirs : dict
+         image path tree
+    """
+    sortedSubDirNames = sorted(os.listdir(treesPath), key=lambda f: int(f))
+    treeDirs = {}
+
+    for d in sortedSubDirNames:
+        subDir = os.path.join(treesPath, d)
+        sortedImgNames = sorted(os.listdir(subDir), key=lambda f: int(f.split('.')[0]))
+        treeDirs.update({d : sortedImgNames})
+
+    return treeDirs

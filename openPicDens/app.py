@@ -14,6 +14,7 @@ import math
 from scipy.interpolate import interp1d
 
 from .utils import *
+from .config import *
 from unet.utills import predictImgMask
 from itertools import groupby
 
@@ -25,13 +26,16 @@ class BI:
     imgPath : str
         path to image
     blurType: str
-        Choises: Gaussian (default), Median, Normalized Box Filter (NBF), Bilateral
+        Choises: Gaussian (default), Median, Normalized Box Filter (NBF), Bilateral (default=Median)
     biMethod: str
-        Choises: Otsu, Mean, Gaussian, UNET
+        Choises: Otsu, Mean, Gaussian, UNET (default=Otsu)
     gammaEqualisation: bool
-        if True, the image is gamma-corrected
+        if True, the image is gamma-corrected (default=False)
     ksize: int
-        Kernel size
+        Kernel size. Takes only odd values (default=3)
+    constantTh : int
+        Only if none of the binarization methods is selected. 
+        Binarization is performed using a fixed threshold value constantTh (default=235)
 
     Methods
     -------
@@ -151,9 +155,19 @@ class PICDens():
         normalization method (the default is 'median')
     smaInterval : int
         smoothing window size (the default is 90)
-    biMethod : str
-    options : list
+    gapValue : int | None
+        the size of the filter gap window. If set to None, the filter is not applied
+        (default is None)
 
+
+    biMethod : str
+        method of binarization
+    blurType : str
+        Blur type. Choises: Gaussian (default), Median, Normalized Box Filter (NBF), Bilateral. (Default: Median)
+    gammaEqualisation : bool
+    ksize : int
+        Kernel size. Takes only odd values (default=3)
+    constantTh
     usePredBIImgs: bool
         set this variable to true if you have pre-binarized images (default is False)
     biImgsPath : str
@@ -162,16 +176,8 @@ class PICDens():
         (default is False)
     modelPath : str | bool
 
-    gapValue : int | None
-        the size of the filter gap window. If set to None, the filter is not applied
-        (default is None)
-
     Methods
     -------
-    initPath(path: str) -> str
-    getTreeDirs() -> dict
-    initResDict() -> tuple
-    saveDataToFile(savePath: str, data: pd.DataFrame, fileName: str, ext: str='txt') -> None
     startScan() -> None
     scanSubDir(subDir: str, imgsList: list) -> pd.DataFrame
     getLongPorosityProfile(porosityDict: dict, normMethod: str) -> tuple
@@ -186,6 +192,8 @@ class PICDens():
     scanImg(imgPath: str, windowSize: int = 1000, step: int= 200) -> pd.DataFrame
     getPorosityProfileToPix(biImg: np.ndarray) -> list
     gapFilter(x: np.array) -> list
+    saveConfigFile() -> None
+    getSD -> tuple
     
     """
     def __init__(
@@ -198,7 +206,6 @@ class PICDens():
         pixToMcmCoef: float|int = 1,
         normMethod: str="median",
         smaInterval: int=90,
-        options: list=['__all__'],
         gapValue=None,
         
         biMethod: str='Otsu',
@@ -211,6 +218,8 @@ class PICDens():
         biImgsPath: str=False,
         ):
 
+        # main settings
+
         self.savePath = savePath
         self.root = root
         self.speciesName = speciesName
@@ -219,8 +228,9 @@ class PICDens():
         self.pixToMcmCoef = pixToMcmCoef
         self.normMethod = normMethod
         self.smaInterval = smaInterval
-        self.options = options
         self.gapValue = gapValue
+
+        # BI settings
 
         self.biMethod = biMethod
         self.blurType = blurType
@@ -234,295 +244,320 @@ class PICDens():
         if self.usePredBIImgs:
             self.root = self.biImgsPath
 
-        # Init save-path
-        self.areaPorSavePath = os.path.join(self.savePath, 'areaPorosity')
-        self.initPath(self.areaPorSavePath)
-
         self.saveConfigFile()
 
+    def startScan(self) -> None:
+        """Performs an analysis of the root directory containing subdirectories with images"""
 
-    def saveConfigFile(self):
-        config = pd.Series(data={
-            'savePath': self.savePath,
-            'root': self.root,
-            'speciesName': self.speciesName,
-            'start year': self.yearStart,
-            'value of gap': self.gapValue,
-            'SMA window': self.smaInterval
-        }, index = ['savePath', 'root', 'speciesName', 'start year', 'value of gap', 'SMA window'])
-        saveDFasTXT(data=config, filePath=os.path.join(self.savePath, 'config.txt'), sep='\t')
+        # Init save paths
+        treesDirs = getTreeDirs(treesPath=self.root)
+        natPath = os.path.join(self.savePath, SAVE_PATHS["natural_path"])
+        normPath = os.path.join(self.savePath, SAVE_PATHS["norm_path"])
+        rawPath = os.path.join(self.savePath, SAVE_PATHS["raw_path"])
+        rwPath = os.path.join(self.savePath, SAVE_NAMES["rw"])
+        maxPPath = os.path.join(self.savePath, SAVE_NAMES["max"])
+        minPPath = os.path.join(self.savePath, SAVE_NAMES["min"])
+        meanPPath = os.path.join(self.savePath, SAVE_NAMES["mean"])
+        maxPQPath = os.path.join(self.savePath, SAVE_NAMES["maxQ"])
+        minPQPath = os.path.join(self.savePath, SAVE_NAMES["minQ"])
+        meanPQPath = os.path.join(self.savePath, SAVE_NAMES["meanQ"])
+        ewPath = os.path.join(self.savePath, SAVE_NAMES["ew"])
+        lwPath = os.path.join(self.savePath, SAVE_NAMES["lw"])
+        ewprPath = os.path.join(self.savePath, SAVE_NAMES["ewpr"])
+        lwprPath = os.path.join(self.savePath, SAVE_NAMES["lwpr"])
+        ewpPath = os.path.join(self.savePath, SAVE_NAMES["ewp"])
+        lwpPath = os.path.join(self.savePath, SAVE_NAMES["lwp"])
+        longPath = os.path.join(self.savePath, SAVE_NAMES["long"])
+        avgPath = os.path.join(self.savePath, SAVE_NAMES["avg"])
+        secDir = os.path.join(self.savePath, SAVE_PATHS["sec_path"])
+        secPaths = [os.path.join(secDir, SAVE_NAMES[sec]) for sec in range(10)]
 
-    def initPath(self, path: str) -> str:
-        """
-        this method creates the specified directory if it does not exist
-        
-        Parameters
-        ----------
-        path : str
-            init path
-        """
-        path = path.replace('\\', '/')
-        if not os.path.isdir(path):
-            os.mkdir(path, 0o754)
-        return path
+        rw_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["rw"])
+        max_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["max"])
+        min_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["min"])
+        mean_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["mean"])
+        maxq_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["maxQ"])
+        minq_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["minQ"])
+        meanq_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["meanQ"])
+        ew_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["ew"])
+        lw_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["lw"])
+        ewpr_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["ewpr"])
+        lwpr_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["lwpr"])
+        ewp_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["ewp"])
+        lwp_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["lwp"])
 
+        initResultsPathsFromImages(root=self.savePath, treesPath=self.root)
 
-    def getTreeDirs(self) -> dict:
-        """
-        this method builds a tree of paths to the images
-        
-        Returns
-        ----------
-        treeDirs : dict
-             image path tree
-        """
-        sortedSubDirNames = sorted(os.listdir(self.root), key=lambda f: int(f))
-        treeDirs = {}
-
-        for d in sortedSubDirNames:
-            subDir = os.path.join(self.root, d)
-            sortedImgNames = sorted(os.listdir(subDir), key=lambda f: int(f.split('.')[0]))
-            treeDirs.update({d : sortedImgNames})
-
-        return treeDirs
-
-    def initResDict(self) -> tuple:
-        """
-        
-        
-        Returns
-        ----------
-        dictsRes : tuple
-        """
+        # Init dicts for results
+        rawPorosityDict = {}
         rwDict = {}
         maxPorosityDict = {}
         minPorosityDict = {}
         meanPorosityDict = {}
-        earlyWidthDict = {}
-        lateWidthDict = {}
-        earlyPercDict = {}
-        latePercDict = {}
         maxPorosityQDict = {}
         minPorosityQDict = {}
         meanPorosityQDict = {}
-        meanPorEarlyWoodDict = {}
-        meanPorLateWoodDict = {}
+        ewDict = {}
+        lwDict = {}
+        ewprDict = {}
+        lwprDict = {}
+        ewPorosityDict = {}
+        lwPorosityDict = {}
+        naturalPDict ={}
+        normPDict =  {}
+        sectorsPorosityDict = {sec: {} for sec in range(10)}
 
-        treesPorosityDict = {}
-        normPorosityDict = {}
-        sectorsDict = {s: {} for s in range(10)}
-        longPorosityProfile = 0
-        AVG = 0
+        for t in treesDirs:
+            # Init save paths for individuals tress
+            treePath = os.path.join(self.root, t)
+            natTreePath = os.path.join(natPath, f"{t}.txt")
+            normTreePath = os.path.join(normPath, f"{t}.txt")
+            rawTreePath = os.path.join(rawPath, f"{t}.txt")
 
-        oneFileRes = {
-            'rw' : [
-                self.getRW, [rwDict], ['rw']
-            ],
-            'mainPorosityFeatures' : [
-                self.getPorosityCharacteristics, [maxPorosityDict, minPorosityDict, meanPorosityDict],
-                ['maxPorosity', 'minPorosity', 'meanPorosity']
-            ],
-            'earlyLateWoodFeatures' : [
-                self.getEarlyLateWidth, [earlyWidthDict, lateWidthDict, earlyPercDict, latePercDict, meanPorEarlyWoodDict, meanPorLateWoodDict],
-                ['earlyWidth', 'lateWidth', 'earlyPerc', 'latePerc', 'meanPorEarlyWood', 'meanPorLateWood']
-            ],
-            'mainPorosityFeaturesQuantile' : [
-                self.getPorosityCharacteristicsProcentile, [maxPorosityQDict, minPorosityQDict, meanPorosityQDict],
-                ['maxPorosityQ', 'minPorosityQ', 'meanPorosityQ']
-            ],
-        }
-
-        severalFileRes = {
-            'treesPorosity' : [
-                self.getPorProfilesNaturalValues, [treesPorosityDict], ['naturalValuesPorosity']
-            ],
-            'normPorosity' : [
-                self.getNormPorosityProfiles, [normPorosityDict], ['normValuesPorosity']
-            ],
-        }
-        sectorsFileRes = {
-            'sectorsPorosity' : [
-                self.getSectorPorosity, [sectorsDict], ['sectorsPorosity']
-            ]
-        }
-
-        longFileRes = {
-            'annualPorosity' : [
-                self.getLongPorosityProfile, [longPorosityProfile, AVG], ['longNormPorosity', 'AVG']
-            ]
-        }
-
-        if self.options == ['__all__']:
-            return oneFileRes, severalFileRes, sectorsFileRes, longFileRes
-
-    def saveDataToFile(self, savePath: str, data: pd.DataFrame, fileName: str, ext: str='txt', reverse=True) -> None:
-        """
-        A method for automated scanning of a directory containing images of micrographs of woody plants.
-        Parameters
-        -------
-        savePath : str
-            saving path
-        data: pd.DataFrame
-            dataframe to save
-        fileName : str
-            name of file to save
-        ext : str
-            file extension
-
-        """
-        savePath = os.path.join(savePath, f'{fileName}.{ext}')
-        savePath = savePath.replace('\\', '/')
-        if reverse:
-            data = data[::-1]
-        
-        saveDFasTXT(data=data, filePath=savePath, sep='\t')
-
-
-    def startScan(self) -> None:
-        """
-        A method for automated scanning of a directory containing images of micrographs of woody plants
-
-        """
-        
-        treeDirs = self.getTreeDirs()
-        oneFileResDict, severalFileResDict, sectorsFileResDict, longRawResDict = self.initResDict()
-        rawPorosityDict = {}
-
-        for d in treeDirs:
-            subDir = os.path.join(self.root, d)
-            porosityByYearsDF = self.scanSubDir(subDir=subDir, imgsList=treeDirs[d])
+            # Scan subdir
+            porosityByYearsDF = self.scanSubDir(subDir=treePath, imgsNames=treesDirs[t])
             porosityByYearsSMADF = smaDF(porosityByYearsDF, smaInterval=self.smaInterval)
-            rawPorosityDict.update({d: porosityByYearsDF})
+            rawPorosityDict.update({t: porosityByYearsSMADF})
+
+            # Get main features
+            rw = self.getRW(porosityProfiles=porosityByYearsDF)
+            maxP, minP, meanP = self.getPorosityCharacteristics(porosityProfiles=porosityByYearsSMADF)
+            maxQP, minQP, meanQP = self.getPorosityCharacteristicsProcentile(porosityProfiles=porosityByYearsSMADF)
+            ew, lw, ewpr, lwpr, meanPew, meanPlw = self.getEarlyLateWidth(porosityProfiles=porosityByYearsSMADF)
+            sectP = self.getSectorPorosity(porosityProfiles=porosityByYearsSMADF, sectorsNumber=10)
+            naturalP = self.getPorProfilesNaturalValues(porosityProfiles=porosityByYearsSMADF)
+            normP = self.getNormPorosityProfiles(porosityProfiles=porosityByYearsSMADF)
+
+            # Update res-dicts
+            rwDict.update({t: rw})
+            maxPorosityDict.update({t: maxP})
+            minPorosityDict.update({t: minP})
+            meanPorosityDict.update({t: meanP})
+            maxPorosityQDict.update({t: maxQP})
+            minPorosityQDict.update({t: minQP})
+            meanPorosityQDict.update({t: meanQP})
+            ewDict.update({t: ew})
+            lwDict.update({t: lw})
+            ewprDict.update({t: ewpr})
+            lwprDict.update({t: lwpr})
+            ewPorosityDict.update({t: meanPew})
+            lwPorosityDict.update({t: meanPlw})
+            naturalPDict.update({t: naturalP})
+            normPDict.update({t: normP})
+
+            for sec in range(len(sectorsPorosityDict)):
+                sectorsPorosityDict[sec].update({t: sectP[sec]})
+
+            # Saving individual results
+            saveDFasTXT(data=naturalP, filePath=natTreePath, sep='\t')
+            saveDFasTXT(data=normP, filePath=normTreePath, sep='\t')
+
+        longPorosityProfilesDF, AVG = self.getLongPorosityProfile(porosityDict=rawPorosityDict, normMethod="median")
+
+        # Pad 
+        rwDict = pad_dict_list(dict_list=rwDict)
+        maxPorosityDict = pad_dict_list(dict_list=maxPorosityDict)
+        minPorosityDict = pad_dict_list(dict_list=minPorosityDict)
+        meanPorosityDict = pad_dict_list(dict_list=meanPorosityDict)
+        maxPorosityQDict = pad_dict_list(dict_list=maxPorosityQDict)
+        minPorosityQDict = pad_dict_list(dict_list=minPorosityQDict)
+        meanPorosityQDict = pad_dict_list(dict_list=meanPorosityQDict)
+        ewDict = pad_dict_list(dict_list=ewDict)
+        lwDict = pad_dict_list(dict_list=lwDict)
+        ewprDict = pad_dict_list(dict_list=ewprDict)
+        lwprDict = pad_dict_list(dict_list=lwprDict)
+        ewPorosityDict = pad_dict_list(dict_list=ewPorosityDict)
+        lwPorosityDict = pad_dict_list(dict_list=lwPorosityDict)
+        for sec in range(len(sectorsPorosityDict)):
+            sectorsPorosityDict[sec] = pad_dict_list(dict_list=sectorsPorosityDict[sec])
+
+        # Get dataframes for results
+        rwDF = pd.DataFrame(data=rwDict)
+        maxPorosityDF = pd.DataFrame(data=maxPorosityDict)
+        minPorosityDF = pd.DataFrame(data=minPorosityDict)
+        meanPorosityDF = pd.DataFrame(data=meanPorosityDict)
+        maxPorosityQDF = pd.DataFrame(data=maxPorosityQDict)
+        minPorosityQDF = pd.DataFrame(data=minPorosityQDict)
+        meanPorosityQDF = pd.DataFrame(data=meanPorosityQDict)
+        ewDF = pd.DataFrame(data=ewDict)
+        lwDF = pd.DataFrame(data=lwDict)
+        ewprDF = pd.DataFrame(data=ewprDict)
+        lwprDF = pd.DataFrame(data=lwprDict)
+        ewPorosityDF = pd.DataFrame(data=ewPorosityDict)
+        lwPorosityDF = pd.DataFrame(data=lwPorosityDict)
+
+        # Save results in rwl-extension
+        rw2rwl(data=rwDF, savePath=rw_rwl_Path, end_year=self.yearStart, coef=1)
+        rw2rwl(data=maxPorosityDF, savePath=max_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=minPorosityDF, savePath=min_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=meanPorosityDF, savePath=mean_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=maxPorosityQDF, savePath=maxq_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=minPorosityQDF, savePath=minq_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=meanPorosityQDF, savePath=meanq_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=ewDF, savePath=ew_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=lwDF, savePath=lw_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=ewprDF, savePath=ewpr_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=lwprDF, savePath=lwpr_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=ewPorosityDF, savePath=ewp_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=lwPorosityDF, savePath=lwp_rwl_Path, end_year=self.yearStart, coef=1000)
 
 
-            for opt in oneFileResDict:
-                func = oneFileResDict[opt][0]
-                results = func(porosityByYearsDF) if opt == 'rw' else func(porosityByYearsSMADF)
 
-                for i in range(len(oneFileResDict[opt][1])):
-                    if type(results) is tuple:
-                        oneFileResDict[opt][1][i].update({d : results[i]})
-                    else:
-                        oneFileResDict[opt][1][i].update({d : results})
+        # Save results
+        saveDFasTXT(data=rwDF, filePath=rwPath, sep='\t')
+        saveDFasTXT(data=maxPorosityDF, filePath=maxPPath, sep='\t')
+        saveDFasTXT(data=minPorosityDF, filePath=minPPath, sep='\t')
+        saveDFasTXT(data=meanPorosityDF, filePath=meanPPath, sep='\t')
+        saveDFasTXT(data=maxPorosityQDF, filePath=maxPQPath, sep='\t')
+        saveDFasTXT(data=minPorosityQDF, filePath=minPQPath, sep='\t')
+        saveDFasTXT(data=meanPorosityQDF, filePath=meanPQPath, sep='\t')
+        saveDFasTXT(data=ewDF, filePath=ewPath, sep='\t')
+        saveDFasTXT(data=lwDF, filePath=lwPath, sep='\t')
+        saveDFasTXT(data=ewprDF, filePath=ewprPath, sep='\t')
+        saveDFasTXT(data=lwPorosityDF, filePath=lwprPath, sep='\t')
+        saveDFasTXT(data=longPorosityProfilesDF, filePath=longPath, sep='\t')
+        saveDFasTXT(data=AVG, filePath=avgPath, sep='\t')
 
-            for opt in severalFileResDict:
-                func = severalFileResDict[opt][0]
-                results = func(porosityByYearsSMADF)
+        for sec in range(len(sectorsPorosityDict)):
+            secDF = pd.DataFrame(data=sectorsPorosityDict[sec])
+            saveDFasTXT(data=secDF, filePath=secPaths[sec], sep='\t')
+            
 
-                for i in range(len(severalFileResDict[opt][1])):
-                    if type(results) is tuple:
-                        severalFileResDict[opt][1][i].update({d : results[i]})
-                    else:
-                        severalFileResDict[opt][1][i].update({d : results})
-
-            for opt in sectorsFileResDict:
-                func = sectorsFileResDict[opt][0]
-                results = func(porosityByYearsSMADF)
-
-                for i in range(len(sectorsFileResDict[opt][1])):
-                    for sector in sectorsFileResDict[opt][1][i]:
-                        sectorData = results[sector]
-                        sectorsFileResDict[opt][1][i][sector].update({d : sectorData})
-
-
-        rwlSavePath = os.path.join(self.savePath, 'rwl')
-        for opt in oneFileResDict:
-            if not os.path.isdir(rwlSavePath):
-                os.mkdir(rwlSavePath, 0o754)
-
-            for i in range(len(oneFileResDict[opt][1])):
-                oneFileResDict[opt][1][i] = pad_dict_list(oneFileResDict[opt][1][i])
-                oneFileResDict[opt][1][i] = pd.DataFrame(data=oneFileResDict[opt][1][i])
-                self.saveDataToFile(savePath=self.savePath, data=oneFileResDict[opt][1][i], fileName=oneFileResDict[opt][2][i])
-
-                if oneFileResDict[opt][2][i] in ('rw', 'earlyWidth', 'lateWidth'):
-                    coef = 1
-                else:
-                    coef = 1000
-                rw2rwl(data=oneFileResDict[opt][1][i], fileName=oneFileResDict[opt][2][i], savePath=rwlSavePath, end_year=self.yearStart, coef=coef)
-        
-        for opt in severalFileResDict:
-            for i in range(len(severalFileResDict[opt][1])):
-                for treeN in severalFileResDict[opt][1][i]:
-                    data = severalFileResDict[opt][1][i][treeN]
-                    subDir = severalFileResDict[opt][2][i]
-                    sp = os.path.join(self.savePath, subDir)
-                    self.initPath(sp)
-                    self.saveDataToFile(savePath=sp, data=data, fileName=f'{treeN}')
-
-        for opt in sectorsFileResDict:
-            for i in range(len(sectorsFileResDict[opt][1])):
-                subDir = sectorsFileResDict[opt][2][i]
-                for sector in sectorsFileResDict[opt][1][i]:
-                    data = pad_dict_list(sectorsFileResDict[opt][1][i][sector])
-                    data = pd.DataFrame(data)
-                    sp = os.path.join(self.savePath, subDir)
-                    coef = 1000
-                    self.initPath(sp)
-                    self.saveDataToFile(savePath=sp, data=data, fileName=f'sector_{sector}')
-                    rw2rwl(data=data, fileName=f'sector_{sector}', savePath=rwlSavePath, end_year=self.yearStart, coef=coef)
-
-        for rp in rawPorosityDict:
-            sp = os.path.join(self.savePath, 'rawPorosity')
-            self.initPath(sp)
-            self.saveDataToFile(savePath=sp, data=rawPorosityDict[rp], fileName=rp)
-
-        for opt in longRawResDict:
-            func = longRawResDict[opt][0]
-            results = func(severalFileResDict['normPorosity'][1][0], normMethod='median')
-
-            for r in range(len(results)):
-                fileName = longRawResDict[opt][2][r]
-                self.saveDataToFile(savePath=self.savePath, data=results[r], fileName=fileName)
-
-
-    def scanSubDir(self, subDir: str, imgsList: list) -> pd.DataFrame:
-        """
-        this method scans a directory of wood microstructure images
+    def scanSubDir(self, subDir: str, imgsNames: list) -> pd.DataFrame:
+        """Scans images from a directory
         
         Parameters
         ----------
         subDir : str
-            image subdirectory
-        imgsList : list
-            list of images in the directory
+            subdirectory
+        imgsNames : list
+            names of images
 
         Returns
         -------
         porosityByYearsDF : pd.DataFrame
-            averaged annualized porosity profiles of one tree 
+            dataframe with yearly porosity profiles
         """
-        print(f'[INFO] Start scan direction {subDir}')
-        
-        imgsPathList = [os.path.join(subDir, i) for i in imgsList]
+
         porosityByYearsDict = {}
-        areaSDPath = os.path.join(self.areaPorSavePath, subDir.split('/')[-1])
-        self.initPath(areaSDPath)
-        porositySDDict = {}
-        porositySMASDDict = {}
+        porosity_SD_Dict = {}
+        porosity_SMA_SD_Dict = {}
+        
+        treeN = subDir.split('/')[-1]
+        sdPorosityPath = os.path.join(self.savePath, SAVE_PATHS["sd_porosity_path"], treeN)
+        SD_path = os.path.join(sdPorosityPath, f'{subDir.split('/')[-1]}_SD.txt')
+        SMA_SD_path = os.path.join(sdPorosityPath, f'{subDir.split('/')[-1]}_SMA_SD.txt')
+        rawPorosityDir = os.path.join(self.savePath, SAVE_PATHS["raw_path"], treeN)
 
-        for ip, im in zip(imgsPathList, imgsList):
-            porositySDList = []
-            imageNumber = int(im.split('.')[0])
-            porosityDF = self.scanImg(ip)
+        for imName in imgsNames:
+            imN = int(imName.split('.')[0])
+            imPath = os.path.join(subDir, imName)
+            porosityDF = self.scanImg(imPath)
             porosityDF['finalPorosityProfile'] = porosityDF.mean(axis=1)
+            rawProfile = pd.DataFrame(data={imN: porosityDF['finalPorosityProfile']})
 
-            porositySDList, detrendSMASDList, porosityDF = self.sdSmooth(porosityDF, im.split('.')[0], areaSDPath)
-            porositySDDict.update({im : porositySDList})
-            porositySMASDDict.update({im : detrendSMASDList})
-            porosityByYearsDict.update({self.yearStart-imageNumber+1: porosityDF['finalPorosityProfile'].tolist()})
+            rawPorosityPath = os.path.join(rawPorosityDir, f'{imN}.txt')
 
+            porosity_SD_List, detrend_SMA_SD_List, porosityDF = self.getSD(
+                porosityDF=porosityDF, 
+                nTree=imN, 
+                savePath=sdPorosityPath,
+                r=300,
+                step=5,
+                leftBorderPerc=0.1,
+                rightBorderPerc=0.3)
+            
+            porosity_SD_Dict.update({imN : porosity_SD_List})
+            porosity_SMA_SD_Dict.update({imN : detrend_SMA_SD_List})
+            porosityByYearsDict.update({self.yearStart-imN+1: porosityDF['finalPorosityProfile'].tolist()})
 
-        porositySDDict = pad_dict_list(porositySDDict)
-        porositySMASDDict = pad_dict_list(porositySMASDDict)
-        porositySD = pd.DataFrame(data=porositySDDict)
-        porositySMASD = pd.DataFrame(data=porositySMASDDict)
-        self.saveDataToFile(data=porositySD, fileName=f'{subDir.split('/')[-1]}_SD', savePath=areaSDPath)
-        self.saveDataToFile(data=porositySMASD, fileName=f'{subDir.split('/')[-1]}_SMASD', savePath=areaSDPath)
+            saveDFasTXT(data=rawProfile, filePath=rawPorosityPath, sep='\t')
 
+        porosity_SD_Dict = pad_dict_list(porosity_SD_Dict)
+        porosity_SMA_SD_Dict = pad_dict_list(porosity_SMA_SD_Dict)
         porosityByYearsDict = pad_dict_list(porosityByYearsDict)
+
+        porosity_SD = pd.DataFrame(data=porosity_SD_Dict)
+        porosity_SMA_SD = pd.DataFrame(data=porosity_SMA_SD_Dict)
         porosityByYearsDF = pd.DataFrame(data=porosityByYearsDict)
+
+        saveDFasTXT(data=porosity_SD, filePath=SD_path, sep='\t')
+        saveDFasTXT(data=porosity_SMA_SD, filePath=SMA_SD_path, sep='\t')
+
         return porosityByYearsDF
+
+
+    def getSD(
+        self, 
+        porosityDF: pd.DataFrame, 
+        nTree: int, 
+        savePath: str, 
+        r: int=300, 
+        step: int=5, 
+        leftBorderPerc:float|int=0.1, 
+        rightBorderPerc:float|int=0.3):
+        """returns standard deviations for chronologies and standard deviations for detrended chronologies
+        
+        Parameters
+        ----------
+        porosityDF : pd.DataFrame
+            dataframe with porosity profiles
+        nTree : int
+            number of tree
+        savePath : str
+            save path
+        r : int
+            maximum smoothing interval (default=300)
+        step : step
+            step that is added to the smoothing interval at each iteration (default=5)
+        leftBorderPerc : float | int
+            the fraction of the ring porosity profile from which the analysis will begin (default=0.1)
+        rightBorderPerc : float | int
+            the fraction of the ring porosity profile at which the analysis will end (default=0.3)
+
+        Returns
+        -------
+        porosity_SD_List : List
+            standard deviations of porosity profiles
+        detrend_SMA_SD_List : List
+            standard deviations of detrended porosity profiles
+        porosityDF : pd.DataFrame
+            dataframe with porosity profiles, supplemented with smooth curves
+        """
+
+        porosity_SD_List = []
+        detrend_SMA_SD_List = []
+        detrendDf = pd.DataFrame({0: []})
+        detrendSMA = pd.DataFrame({0: []})
+
+        smoothPorositySavePath = os.path.join(savePath, f'sd_{nTree}.txt')
+        detrendPorositySavePath = os.path.join(savePath, f'detrend_{nTree}.txt')
+
+        for i in range(5, r+1, step):
+            if len(porosityDF['finalPorosityProfile'].dropna()) < i:
+                break
+
+            porosityDF[f'smooth_{i}'] = porosityDF['finalPorosityProfile'].rolling(i).mean()
+            porosityDF[f'smooth_{i}'] = porosityDF[f'smooth_{i}'].shift(periods=-i//2)
+
+            leftBorder = int(len(porosityDF[f'smooth_{i}'].dropna())*leftBorderPerc)
+            rightBorder = int(len(porosityDF[f'smooth_{i}'].dropna())*rightBorderPerc)
+
+            porosity_SD_List.append(porosityDF[f'smooth_{i}'][leftBorder: rightBorder].std())
+            detrendDf[f'detrend_{i}'] = porosityDF['finalPorosityProfile'] - porosityDF[f'smooth_{i}']
+
+        if 'detrend_300' in detrendDf.columns:
+            detrend_SMA_SD_List.append(detrendDf['detrend_150'].std())
+            for i in range(0, 300, step):
+                detrendSMA[i] = detrendDf['detrend_150'].rolling(i).mean()
+                detrendSMA[i] = detrendSMA[i].shift(periods=-i//2)
+                detrend_SMA_SD_List.append(detrendSMA[i].std())
+
+        saveDFasTXT(data=porosityDF, filePath=smoothPorositySavePath, sep='\t')
+        saveDFasTXT(data=detrendDf, filePath=detrendPorositySavePath, sep='\t')
+
+        return porosity_SD_List, detrend_SMA_SD_List, porosityDF
+
 
     def getLongPorosityProfile(self, porosityDict: dict, normMethod: str) -> tuple:
         """create a normalized long-term porosity profile
@@ -566,7 +601,6 @@ class PICDens():
         for y in longPorosityDict:
             padPorosity = pad_dict_list(longPorosityDict[y])
             subDF = pd.DataFrame(data=padPorosity)
-            
             if subDF.empty:
                 continue
             normPorosityDF = self.getNormPorosityDF(porosityDF=subDF, normMethod=normMethod)
@@ -622,8 +656,10 @@ class PICDens():
 
         normPorosityDict = {}
         for cp in clearPorosityProfilesDict:
-            convertCoef = reqRW/len(clearPorosityProfilesDict[cp])
-            normPorosity = getNormalisationPorosityProfile(clearPorosityProfilesDict[cp], reqRW)
+            if len(clearPorosityProfilesDict[cp]) <= 5:
+                normPorosity = [0 for i in range(reqRW)]
+            else:
+                normPorosity = getNormalisationPorosityProfile(clearPorosityProfilesDict[cp], reqRW)
             normPorosityDict.update({cp: normPorosity})
 
         normPorosityDF = pd.DataFrame(data=normPorosityDict)
@@ -994,7 +1030,6 @@ class PICDens():
         porosityProfilesDict = {}
 
         if windowSize == -1:
-            # Если windowSize определен как -1, то сканируем изображение полностью, не разбивая его на окна
             porosityProfileToPix = self.getPorosityProfileToPix(binaryImage)
             porosityProfilesDict.update({0: porosityProfileToPix})
         else:
@@ -1004,6 +1039,7 @@ class PICDens():
                 porosityProfilesDict.update({i:porosityProfilePix})
 
         porosityProfilesDF = pd.DataFrame(data=porosityProfilesDict)
+        porosityProfilesDF['finalPorosityProfile'] = porosityProfilesDF.mean(axis=1)
 
         return porosityProfilesDF
 
@@ -1064,44 +1100,17 @@ class PICDens():
         filteredScanLine = np.array(filteredScanLine)
         return filteredScanLine
 
-    def sdSmooth(self, porosityDF, nTree, savePath, r=300, step=5, leftBorderPerc=0.1, rightBorderPerc=0.3):
-        """
+    def saveConfigFile(self) -> None:
+        """Performs an analysis of the root directory containing subdirectories with images"""
+
+        config = pd.Series(data={
+            'savePath': self.savePath,
+            'root': self.root,
+            'speciesName': self.speciesName,
+            'start year': self.yearStart,
+            'value of gap': self.gapValue,
+            'SMA window': self.smaInterval
+        }, index = ['savePath', 'root', 'speciesName', 'start year', 'value of gap', 'SMA window'])
         
-        Parameters
-        ----------
+        saveDFasTXT(data=config, filePath=os.path.join(self.savePath, 'config.txt'), sep='\t')
 
-
-        Returns
-        -------
-
-        """
-        porositySDList = []
-        detrendSMASDList = []
-        detrendDf = pd.DataFrame({0: []})
-        detrendSMA = pd.DataFrame({0: []})
-
-
-        for i in range(5, r+1, step):
-            if len(porosityDF['finalPorosityProfile'].dropna()) < i:
-                break
-
-            porosityDF[f'smooth_{i}'] = porosityDF['finalPorosityProfile'].rolling(i).mean()
-            porosityDF[f'smooth_{i}'] = porosityDF[f'smooth_{i}'].shift(periods=-i//2)
-
-            leftBorder = int(len(porosityDF[f'smooth_{i}'].dropna())*leftBorderPerc)
-            rightBorder = int(len(porosityDF[f'smooth_{i}'].dropna())*rightBorderPerc)
-
-            porositySDList.append(porosityDF[f'smooth_{i}'][leftBorder: rightBorder].std())
-
-            detrendDf[f'detrend_{i}'] = porosityDF['finalPorosityProfile'] - porosityDF[f'smooth_{i}']
-
-        if 'detrend_300' in detrendDf.columns:
-            detrendSMASDList.append(detrendDf['detrend_150'].std())
-            for i in range(0, 300, step):
-                detrendSMA[i] = detrendDf['detrend_150'].rolling(i).mean()
-                detrendSMA[i] = detrendSMA[i].shift(periods=-i//2)
-                detrendSMASDList.append(detrendSMA[i].std())
-
-        self.saveDataToFile(data=porosityDF, fileName=f'sd_{nTree}', savePath=savePath)
-        self.saveDataToFile(data=detrendDf, fileName=f'detrend_{nTree}', savePath=savePath)
-        return porositySDList, detrendSMASDList, porosityDF
