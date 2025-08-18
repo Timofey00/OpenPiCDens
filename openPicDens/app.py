@@ -36,6 +36,8 @@ class BI:
     constantTh : int
         Only if none of the binarization methods is selected. 
         Binarization is performed using a fixed threshold value constantTh (default=235)
+    scale : float|int = 1.0
+        the amount by which the image will be scaled (default=1.0)
 
     Methods
     -------
@@ -50,7 +52,8 @@ class BI:
         ksize: int = 3,
         constantTh: int = 235,
         modelPath: None = None,
-        biMethod: str = 'Otsu'
+        biMethod: str = 'Otsu',
+        scale: float|int = 1.0
         ):
 
         self.blurType = blurType
@@ -58,6 +61,7 @@ class BI:
         self.ksize = ksize
         self.constantTh = constantTh
         self.biMethod = biMethod
+        self.scale = scale
         
         if self.biMethod == 'UNET':
             DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -95,7 +99,7 @@ class BI:
         biImg: np.ndarray
         """
         img = cv2.imread(imgPath)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        img = cv2.resize(img, None, fx = self.scale, fy = self.scale, interpolation = cv2.INTER_CUBIC)
 
         if self.gammaEqualisation:
             img = cv2.equalizeHist(img)
@@ -124,7 +128,7 @@ class BI:
             biImg = img > thresh
             biImg = biImg.astype(np.uint8) * 255
         elif self.biMethod == 'UNET':
-            biImg = predictImgMask(imgPath=imgPath, saveMaskPath=None, divideSize=128, model=self.model)
+            biImg = predictImgMask(imgPath=imgPath, saveMaskPath=None, divideSize=128, model=self.model, scale=self.scale)
             biImg = cv2.cvtColor(biImg, cv2.COLOR_RGB2GRAY)
             th, biImg = cv2.threshold(biImg, 200, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         else:

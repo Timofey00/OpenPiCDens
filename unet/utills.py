@@ -10,7 +10,7 @@ from typing import Tuple
 import torch
 import segmentation_models_pytorch as smp
 
-def cutAndPadImg(newNamePrefix: str, imgPath: str, savePath: str, size: int, isMask: bool=False) -> Tuple[list, int, int, int, int]:
+def cutAndPadImg(newNamePrefix: str, imgPath: str, savePath: str, size: int, isMask: bool=False, scale: float|int=1.0) -> Tuple[list, int, int, int, int]:
 	"""
 	this method divides the image into pieces with the specified size 
 	(if necessary, it supplements them with black color to the required size). 
@@ -28,6 +28,8 @@ def cutAndPadImg(newNamePrefix: str, imgPath: str, savePath: str, size: int, isM
 		desired size of cropped images
 	isMask: bool=False
 		if True, reads the image in binary format
+	scale : float|int = 1.0
+        the amount by which the image will be scaled (default=1.0)
 
 	Returns
 	----------
@@ -43,6 +45,7 @@ def cutAndPadImg(newNamePrefix: str, imgPath: str, savePath: str, size: int, isM
 		augmented image height size
 	"""	
 	img = cv2.imread(imgPath)
+	img = cv2.resize(img, None, fx = scale, fy = scale, interpolation = cv2.INTER_CUBIC)
 	img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 	if isMask:
 		th, img = cv2.threshold(img, 230, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
@@ -183,7 +186,7 @@ def joinDivideImgs(imgsList: list, ySize: int, xSize: int, padRight: int, padBot
 	return img
 
 
-def predictImgMask(imgPath: str, saveMaskPath: str, divideSize: int, model: smp.Unet) -> np.array:
+def predictImgMask(imgPath: str, saveMaskPath: str, divideSize: int, model: smp.Unet, scale:float|int=1.0) -> np.array:
 	"""
 	this method predicts the image mask
 
@@ -197,20 +200,23 @@ def predictImgMask(imgPath: str, saveMaskPath: str, divideSize: int, model: smp.
 		split image size
 	model : int
 		predictive model
+	scale : float|int = 1.0
+        the amount by which the image will be scaled (default=1.0)
+
 	Returns
 	----------
 	mask : np.array
 		predicted mask
 
 	"""	
-	cuts, ySize, xSize, padRight, padBottom = cutAndPadImg(newNamePrefix=None, imgPath=imgPath, savePath=None, size=divideSize, isMask=False)
+	cuts, ySize, xSize, padRight, padBottom = cutAndPadImg(newNamePrefix=None, imgPath=imgPath, savePath=None, size=divideSize, isMask=False, scale=scale)
 
 	predMasksList = []
 
 	print("[INFO] start prediction...")
 	for i in cuts:
 		DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-		mask = make_predictions(model=model, imagePath=None, INPUT_IMAGE_HEIGHT=divideSize, INPUT_IMAGE_WIDTH=divideSize, DEVICE=DEVICE, THRESHOLD=0.5, image=i)
+		mask = make_predictions(model=model, imagePath=None, INPUT_IMAGE_HEIGHT=divideSize, INPUT_IMAGE_WIDTH=divideSize, DEVICE=DEVICE, THRESHOLD=0.5, image=i, scale=scale)
 		predMasksList.append(mask)
 
 	mask = joinDivideImgs(predMasksList, ySize, xSize, padRight, padBottom)
