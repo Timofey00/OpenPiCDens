@@ -107,9 +107,6 @@ def rw2rwl(data : pd.DataFrame, savePath: str, end_year: int=2022, coef=1) -> st
         rwl data
     """
     ext = '.rwl'
-    # fileName = fileName + ext
-    # savePath = os.path.join(savePath, fileName).replace('\\', '/')
-    # print(savePath)
     data = data * coef
     data = data.replace(-1000, -1)
     # Convert rw file in rwl-format
@@ -134,7 +131,6 @@ def rw2rwl(data : pd.DataFrame, savePath: str, end_year: int=2022, coef=1) -> st
                 new_str += ' -9999'
             new_str += '\n'
             rwl_text = new_str + rwl_text
-            # print(rwl_text)
 
             end_dec_year = start_dec_year - 1
             start_dec_year -= 10
@@ -311,14 +307,13 @@ def initResultsPathsFromImages(root: str, treesPath: str) -> None:
 
     dirTree = {}
     dirTree.update({'areaPorosity': treesList})
-    dirTree.update({'rawPorosity': treesList})
     dirTree.update({'naturalValuesPorosity': []})
     dirTree.update({'normValuesPorosity': []})
-    # dirTree.update({'rawPorosity': []})
+    dirTree.update({'rawPorosity': []})
     dirTree.update({'rwl': [
         'EW', 'EWPOR', 'LWPOR', 'maxPorosity', 'maxPorosityQ',
         'meanPorosity', 'meanPorosityQ', 'minPorosity',
-        'minPorosityQ', 'sectors'
+        'minPorosityQ', 'sectors', 'rawPorosity'
         ]})
     dirTree.update({'sectorsPorosity': []})
 

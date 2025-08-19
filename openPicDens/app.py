@@ -355,6 +355,7 @@ class PICDens():
             # Saving individual results
             saveDFasTXT(data=naturalP, filePath=natTreePath, sep='\t')
             saveDFasTXT(data=normP, filePath=normTreePath, sep='\t')
+            saveDFasTXT(data=porosityByYearsDF, filePath=rawTreePath, sep='\t')
 
         longPorosityProfilesDF, AVG = self.getLongPorosityProfile(porosityDict=rawPorosityDict, normMethod="median")
 
@@ -425,7 +426,7 @@ class PICDens():
         for sec in range(len(sectorsPorosityDict)):
             secDF = pd.DataFrame(data=sectorsPorosityDict[sec])
             saveDFasTXT(data=secDF, filePath=secPaths[sec], sep='\t')
-            
+                
 
     def scanSubDir(self, subDir: str, imgsNames: list) -> pd.DataFrame:
         """Scans images from a directory
@@ -451,7 +452,6 @@ class PICDens():
         sdPorosityPath = os.path.join(self.savePath, SAVE_PATHS["sd_porosity_path"], treeN)
         SD_path = os.path.join(sdPorosityPath, f'{subDir.split('/')[-1]}_SD.txt')
         SMA_SD_path = os.path.join(sdPorosityPath, f'{subDir.split('/')[-1]}_SMA_SD.txt')
-        rawPorosityDir = os.path.join(self.savePath, SAVE_PATHS["raw_path"], treeN)
 
         for imName in imgsNames:
             imN = int(imName.split('.')[0])
@@ -460,7 +460,6 @@ class PICDens():
             porosityDF['finalPorosityProfile'] = porosityDF.mean(axis=1)
             rawProfile = pd.DataFrame(data={imN: porosityDF['finalPorosityProfile']})
 
-            rawPorosityPath = os.path.join(rawPorosityDir, f'{imN}.txt')
 
             porosity_SD_List, detrend_SMA_SD_List, porosityDF = self.getSD(
                 porosityDF=porosityDF, 
@@ -474,8 +473,6 @@ class PICDens():
             porosity_SD_Dict.update({imN : porosity_SD_List})
             porosity_SMA_SD_Dict.update({imN : detrend_SMA_SD_List})
             porosityByYearsDict.update({self.yearStart-imN+1: porosityDF['finalPorosityProfile'].tolist()})
-
-            saveDFasTXT(data=rawProfile, filePath=rawPorosityPath, sep='\t')
 
         porosity_SD_Dict = pad_dict_list(porosity_SD_Dict)
         porosity_SMA_SD_Dict = pad_dict_list(porosity_SMA_SD_Dict)
