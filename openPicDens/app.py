@@ -132,7 +132,7 @@ class BI:
             biImg = cv2.cvtColor(biImg, cv2.COLOR_RGB2GRAY)
             th, biImg = cv2.threshold(biImg, 200, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         else:
-            th, biImg = cv2.threshold(img, constantTh, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+            th, biImg = cv2.threshold(img, self.constantTh, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
 
         return biImg
 
@@ -275,6 +275,7 @@ class PICDens():
         avgPath = os.path.join(self.savePath, SAVE_NAMES["avg"])
         secDir = os.path.join(self.savePath, SAVE_PATHS["sec_path"])
         secPaths = [os.path.join(secDir, SAVE_NAMES[sec]) for sec in range(10)]
+        AVGPath = os.path.join(self.savePath, SAVE_NAMES["avg"])
 
         rw_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["rw"])
         max_rwl_Path = os.path.join(self.savePath, 'rwl', SAVE_RWL_NAMES["max"])
@@ -358,6 +359,10 @@ class PICDens():
             saveDFasTXT(data=porosityByYearsDF, filePath=rawTreePath, sep='\t')
 
         longPorosityProfilesDF, AVG = self.getLongPorosityProfile(porosityDict=rawPorosityDict, normMethod="median")
+        AVG = self.getNormPorosityProfiles(porosityProfiles=AVG)
+        saveDFasTXT(data=AVG, filePath=AVGPath, sep='\t')
+        # saveDFasTXT(data=longPorosityProfilesDF, filePath=AVGPath, sep='\t')
+
 
         # Pad 
         rwDict = pad_dict_list(dict_list=rwDict)
@@ -391,23 +396,6 @@ class PICDens():
         ewPorosityDF = pd.DataFrame(data=ewPorosityDict)
         lwPorosityDF = pd.DataFrame(data=lwPorosityDict)
 
-        # Save results in rwl-extension
-        rw2rwl(data=rwDF, savePath=rw_rwl_Path, end_year=self.yearStart, coef=1)
-        rw2rwl(data=maxPorosityDF, savePath=max_rwl_Path, end_year=self.yearStart, coef=1000)
-        rw2rwl(data=minPorosityDF, savePath=min_rwl_Path, end_year=self.yearStart, coef=1000)
-        rw2rwl(data=meanPorosityDF, savePath=mean_rwl_Path, end_year=self.yearStart, coef=1000)
-        rw2rwl(data=maxPorosityQDF, savePath=maxq_rwl_Path, end_year=self.yearStart, coef=1000)
-        rw2rwl(data=minPorosityQDF, savePath=minq_rwl_Path, end_year=self.yearStart, coef=1000)
-        rw2rwl(data=meanPorosityQDF, savePath=meanq_rwl_Path, end_year=self.yearStart, coef=1000)
-        rw2rwl(data=ewDF, savePath=ew_rwl_Path, end_year=self.yearStart, coef=1000)
-        rw2rwl(data=lwDF, savePath=lw_rwl_Path, end_year=self.yearStart, coef=1000)
-        rw2rwl(data=ewprDF, savePath=ewpr_rwl_Path, end_year=self.yearStart, coef=1000)
-        rw2rwl(data=lwprDF, savePath=lwpr_rwl_Path, end_year=self.yearStart, coef=1000)
-        rw2rwl(data=ewPorosityDF, savePath=ewp_rwl_Path, end_year=self.yearStart, coef=1000)
-        rw2rwl(data=lwPorosityDF, savePath=lwp_rwl_Path, end_year=self.yearStart, coef=1000)
-
-
-
         # Save results
         saveDFasTXT(data=rwDF, filePath=rwPath, sep='\t')
         saveDFasTXT(data=maxPorosityDF, filePath=maxPPath, sep='\t')
@@ -426,6 +414,33 @@ class PICDens():
         for sec in range(len(sectorsPorosityDict)):
             secDF = pd.DataFrame(data=sectorsPorosityDict[sec])
             saveDFasTXT(data=secDF, filePath=secPaths[sec], sep='\t')
+
+        # Save results in rwl-extension
+        rw2rwl(data=rwDF, savePath=rw_rwl_Path, end_year=self.yearStart, coef=1)
+        rw2rwl(data=maxPorosityDF, savePath=max_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=minPorosityDF, savePath=min_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=meanPorosityDF, savePath=mean_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=maxPorosityQDF, savePath=maxq_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=minPorosityQDF, savePath=minq_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=meanPorosityQDF, savePath=meanq_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=ewDF, savePath=ew_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=lwDF, savePath=lw_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=ewprDF, savePath=ewpr_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=lwprDF, savePath=lwpr_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=ewPorosityDF, savePath=ewp_rwl_Path, end_year=self.yearStart, coef=1000)
+        rw2rwl(data=lwPorosityDF, savePath=lwp_rwl_Path, end_year=self.yearStart, coef=1000)
+
+
+    def analyseRawData(self):
+        rawPath = os.path.join(self.savePath, SAVE_PATHS["raw_path"])
+
+        for t in treesDirs:
+            # Init save paths for individuals tress
+            rawTreePath = os.path.join(rawPath, f"{t}.txt")
+
+            porosityByYearsDF = pd.read_csv(rawTreePath, sep='\t')
+
+
                 
 
     def scanSubDir(self, subDir: str, imgsNames: list) -> pd.DataFrame:
@@ -448,10 +463,10 @@ class PICDens():
         porosity_SD_Dict = {}
         porosity_SMA_SD_Dict = {}
         
-        treeN = subDir.split('/')[-1]
+        treeN = subDir.split('/')[-1].split('\\')[-1]
         sdPorosityPath = os.path.join(self.savePath, SAVE_PATHS["sd_porosity_path"], treeN)
-        SD_path = os.path.join(sdPorosityPath, f'{subDir.split('/')[-1]}_SD.txt')
-        SMA_SD_path = os.path.join(sdPorosityPath, f'{subDir.split('/')[-1]}_SMA_SD.txt')
+        SD_path = os.path.join(sdPorosityPath, f'{treeN}_SD.txt')
+        SMA_SD_path = os.path.join(sdPorosityPath, f'{treeN}_SMA_SD.txt')
 
         for imName in imgsNames:
             imN = int(imName.split('.')[0])
@@ -604,7 +619,7 @@ class PICDens():
             subDF = pd.DataFrame(data=padPorosity)
             if subDF.empty:
                 continue
-            normPorosityDF = self.getNormPorosityDF(porosityDF=subDF, normMethod=normMethod)
+            normPorosityDF = self.getNormPorosityDF(porosityDF=subDF, normMethod="normNumber")
             normPorosityDF['MEAN'] = normPorosityDF.mean(axis=1)
             meansProfilesDict.update({y: normPorosityDF['MEAN'].tolist()})
             longPorosityProfilesList.append(normPorosityDF)
@@ -650,6 +665,8 @@ class PICDens():
             reqRW = median(lens)
         elif normMethod == "mean":
             reqRW = mean(lens)
+        elif normMethod == "normNumber":
+            reqRW = self.normNumber
         else:
             reqRW = lens[0]
 
@@ -981,8 +998,9 @@ class PICDens():
                     sectorsList[s].append(-1)
             else:
                 if len(porosityProfiles[y].dropna()) == 0:
-                    sectorsList[s].append(-1)
-                    continue
+                    for s in range(sectorsNumber):
+                        sectorsList[s].append(-1)
+                        continue
                     
                 cleanPor = porosityProfiles[y].dropna()
                 step = len(cleanPor) // sectorsNumber
