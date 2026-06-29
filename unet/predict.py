@@ -1,86 +1,77 @@
-# USAGE
-# python predict.py
-import matplotlib.pyplot as plt
-import numpy as np
-import torch
+"""
+U-Net tile prediction.
+"""
+
+from __future__ import annotations
+
 import cv2
-import os
-import random
+import numpy as np
 import segmentation_models_pytorch as smp
+import torch
+
 
 def make_predictions(
-	model: smp.Unet, 
-	INPUT_IMAGE_HEIGHT: int, 
-	INPUT_IMAGE_WIDTH: int, 
-	DEVICE: str, 
-	THRESHOLD: float,
-	imagePath: str,
-	image: np.array =None, 
-	) -> np.array:
-	"""
-	function for model training
+    model: smp.Unet,
+    img_path: str | None,
+    tile_size: int,
+    device: str,
+    threshold: float = 0.5,
+    image: np.ndarray | None = None,
+) -> np.ndarray:
+    """Predict a segmentation mask for a single tile.
 
-	Parameters
-	----------
-	model: smp.Unet
-		predictive model
-	imagePath: str
-		if it's not None, uses the image in the path for prediction
-	INPUT_IMAGE_HEIGHT: int
-		image height
-	INPUT_IMAGE_WIDTH: int
-		image width
-	DEVICE: str
-		device
-	THRESHOLD: float
-		minimum probability required for a positive prediction
-	image: np.array | None =None
-		if it's not None, uses this image to predict
+    Either *img_path* or *image* must be provided — not both.
 
-	Returns
-	----------
-	predMask: np.array
-		predicted mask
+    Parameters
+    ----------
+    model : smp.Unet
+        Trained segmentation model.
+    img_path : str | None
+        Path to a source image. When provided, *image* is ignored.
+    tile_size : int
+        Height and width the tile is resized to before inference.
+        Must match the resolution the model was trained on.
+    device : str
+        PyTorch device string: ``"cuda"`` or ``"cpu"``.
+    threshold : float
+        Minimum sigmoid probability to classify a pixel as foreground
+        (default: ``0.5``).
+    image : np.ndarray | None
+        Pre-loaded grayscale tile. Used when *img_path* is ``None``.
 
-	""" 
+    Returns
+    -------
+    np.ndarray
+        Predicted binary mask, shape ``(tile_size, tile_size, 3)``,
+        dtype uint8, values 0 or 255.
 
-	# set model to evaluation mode
-	model.eval()
-	# turn off gradient tracking
-	with torch.no_grad():
-		# load the image from disk, swap its color channels, cast it
-		# to float data type, and scale its pixel values
-		if imagePath:
-			image = cv2.imread(imagePath)
-		else:
-			image = np.expand_dims(image, 2)
-			image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-		image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-		image = image.astype("float32") / 255.0
-		
-		# resize the image and make a copy of it for visualization
-		image = cv2.resize(image, (INPUT_IMAGE_HEIGHT, INPUT_IMAGE_HEIGHT))
-		
-		orig = image.copy()
-		# find the filename and generate the path to ground truth
-		# mask
+    Raises
+    ------
+    ValueError
+        If neither *img_path* nor *image* is provided.
+    """
+    if img_path is None and image is None:
+        raise ValueError("Provide either img_path or image.")
 
-		# make the channel axis to be the leading one, add a batch
-		# dimension, create a PyTorch tensor, and flash it to the
-		# current device
-		image = np.expand_dims(image, 0)
-		image = np.expand_dims(image, 0)
-		image = torch.from_numpy(image).to(DEVICE)
+    model.eval()
+    with torch.no_grad():
+        # Load or convert to grayscale float32
+        if img_path is not None:
+            img = cv2.imread(img_path)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        else:
+            # image arrives as a 2-D grayscale tile from cut_and_pad
+            img = image
 
-		# make the prediction, pass the results through the sigmoid
-		# function, and convert the result to a NumPy array
-		predMask = model(image).squeeze()
-		predMask = torch.sigmoid(predMask)
-		predMask = predMask.cpu().numpy()
-		predMask = predMask.transpose(1, 2, 0)
+        img = img.astype("float32") / 255.0
+        img = cv2.resize(img, (tile_size, tile_size))
 
-		# filter out the weak predictions and convert them to integers
-		predMask = (predMask > THRESHOLD) * 255
-		predMask = predMask.astype(np.uint8)
-		
-		return predMask
+        # (H, W) → (1, 1, H, W) batch tensor
+        tensor = torch.from_numpy(img[np.newaxis, np.newaxis]).to(device)
+
+        pred = model(tensor).squeeze()          # (3, H, W)
+        pred = torch.sigmoid(pred)
+        pred = pred.cpu().numpy().transpose(1, 2, 0)  # (H, W, 3)
+        pred = (pred > threshold).astype(np.uint8) * 255
+
+    return pred

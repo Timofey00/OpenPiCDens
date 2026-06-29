@@ -33,6 +33,7 @@ SAVE_NAMES = {
 	"ewp": f"ewPorosity.{saveExt}",
 	"lwp": f"lwPorosity.{saveExt}",
 	"long": f"long.{saveExt}",
+	"zlong": f"zlong.{saveExt}",
 	"avg": f"avg.{saveExt}",
 }
 

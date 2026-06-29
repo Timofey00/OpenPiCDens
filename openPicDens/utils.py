@@ -1,340 +1,230 @@
 """
-support functions
+Numeric and filesystem utilities for OpenPiCDens.
+
+This module covers:
+- list/DataFrame padding and rounding
+- smoothing (SMA, Savitzky-Golay)
+- porosity-profile normalisation via interpolation
+- directory-tree helpers
 """
+
+from __future__ import annotations
+
+import os
+from math import floor
+from statistics import mean, median
 
 import numpy as np
 import pandas as pd
-import os
-from math import floor
 from scipy.interpolate import interp1d
+from scipy.signal import savgol_filter
+
+
+# ---------------------------------------------------------------------------
+# Data helpers
+# ---------------------------------------------------------------------------
 
 def pad_dict_list(dict_list: dict, padel=np.nan) -> dict:
-    """
-    fills short lists with padels
-    
+    """Pad all lists in *dict_list* to the length of the longest one.
+
     Parameters
     ----------
     dict_list : dict
-    padel
+        Dictionary whose values are lists.
+    padel :
+        Fill value (default: ``np.nan``).
 
     Returns
     -------
-    dict_list: dict
+    dict
+        The same dictionary with all lists padded to equal length.
     """
-    lmax = 0
-    for lname in dict_list.keys():
-        lmax = max(lmax, len(dict_list[lname]))
-    for lname in dict_list.keys():
-        ll = len(dict_list[lname])
-        if  ll < lmax:
-            dict_list[lname] += [padel] * (lmax - ll)
+    if not dict_list:
+        return dict_list
+    max_len = max(len(v) for v in dict_list.values())
+    for key, lst in dict_list.items():
+        shortage = max_len - len(lst)
+        if shortage:
+            dict_list[key] = lst + [padel] * shortage
     return dict_list
 
-def sma(series: list, smaInterval: int=20) -> list:
+
+def mathRound(n: int | float) -> int:
+    """Round *n* using standard mathematical rounding (0.5 rounds up).
+
+    Python's built-in ``round()`` uses banker's rounding; this function
+    always rounds half-up.
     """
-    Simple Moving Average
+    return int(n) + 1 if n - int(n) > 0.5 else int(n)
+
+
+# ---------------------------------------------------------------------------
+# Smoothing
+# ---------------------------------------------------------------------------
+
+def sma(series: list, sma_interval: int = 20) -> list:
+    """Compute a Simple Moving Average of *series*.
 
     Parameters
     ----------
     series : list
-    interv: int
+    sma_interval : int
+        Window size.
 
     Returns
     -------
-    smaSeries: list
+    list
+        Smoothed series of length ``len(series) - sma_interval``.
     """
-    smaSeries = []
-    for d in range(smaInterval, len(series)):
-        avg = sum(series[d-smaInterval:d]) / smaInterval
-        smaSeries.append(avg)
-    return smaSeries
+    return [
+        sum(series[i - sma_interval:i]) / sma_interval
+        for i in range(sma_interval, len(series))
+    ]
 
-def mathRound(n: int | float) -> int:
-    """
-    mathematical rounding
 
-    Parameters
-    ----------
-    n : int | float
-
-    Returns
-    -------
-    n: int
-    """
-    if n - int(n) > 0.5:
-        return int(n)+1
-    else:
-        return int(n)
-
-def smaDF(df: pd.DataFrame, smaInterval) -> pd.DataFrame:
-    """
-    smoothing of all curves in the dataframe
+def smaDF(df: pd.DataFrame, sma_interval: int, smooth_type: str = "sma") -> pd.DataFrame:
+    """Smooth every column in *df*.
 
     Parameters
     ----------
     df : pd.DataFrame
+    sma_interval : int
+        Window size.
+    smooth_type : str
+        ``"sma"`` for Simple Moving Average, ``"sovgol"`` for
+        Savitzky–Golay filter (polynomial order 3).
 
     Returns
     -------
-    smaDF: pd.DataFrame
+    pd.DataFrame
     """
-    newDict = {}
-    for c in df.columns:
-        newDict.update({c:sma(df[c].tolist(), smaInterval)})
-    smaDF = pd.DataFrame(newDict)
-    return smaDF
+    dispatch = {
+        "sma": lambda col: sma(col, sma_interval),
+        "sovgol": lambda col: savgol_filter(col, sma_interval, 3).tolist(),
+    }
+    if smooth_type not in dispatch:
+        raise ValueError(f"Unknown smooth_type: {smooth_type!r}")
 
-def rw2rwl(data : pd.DataFrame, savePath: str, end_year: int=2022, coef=1) -> str:
-    """
-    saves the dataFrame in rwl format
+    return pd.DataFrame({
+        col: dispatch[smooth_type](df[col].tolist())
+        for col in df.columns
+    })
+
+
+# ---------------------------------------------------------------------------
+# Porosity profile normalisation
+# ---------------------------------------------------------------------------
+
+def getNormalisationPorosityProfile(
+    porosity_profile: list,
+    req_len: int,
+    interpolation_type: str = "cubic",
+) -> list:
+    """Resample *porosity_profile* to *req_len* points via interpolation.
 
     Parameters
     ----------
-    data : pd.DataFrame
-        saving data
-    savePath: str
-        path to save data
-    fileName : str
-        file name
-    end_year : int
-        year end
-    coef : int
-        multiplier
-    
+    porosity_profile : list
+        Raw porosity profile.
+    req_len : int
+        Desired length of the output profile.
+    interpolation_type : str
+        Passed directly to :func:`scipy.interpolate.interp1d`
+        (default: ``"cubic"``).
+
     Returns
     -------
-    rwl_text: str
-        rwl data
+    list
+        Resampled profile of length *req_len*.
     """
-    ext = '.rwl'
-    data = data * coef
-    data = data.replace(-1000, -1)
-    # Convert rw file in rwl-format
-    rwl_text = ''
-    for col in data.columns[:].sort_values():
-        list_strings = list(filter(lambda x: str(x)!='nan', data[col].tolist()))
-        list_strings = [str(int(n)) for n in list_strings]
-        
-        start_year = end_year - len(list_strings) + 1
-        end_dec_year = end_year
-        start_dec_year = int(floor(end_dec_year / 10) * 10)
-        
-        while list_strings:
-            year_str = ''
-            for y in range(start_dec_year, end_dec_year+1):
-                new_year = list_strings.pop(0)
-                new_year = ' ' * (6 - len(new_year)) + new_year
-                year_str = new_year + year_str
-
-            new_str = f'{col.replace(" ", "")}' + ' ' * (8-len(col.replace(" ", ""))) + f'{start_dec_year}{year_str}'
-            if end_dec_year == end_year:
-                new_str += ' -9999'
-            new_str += '\n'
-            rwl_text = new_str + rwl_text
-
-            end_dec_year = start_dec_year - 1
-            start_dec_year -= 10
-            if start_dec_year < start_year:
-                start_dec_year = start_year
-    with open(savePath, 'w') as f:
-        f.write(rwl_text)
-        f.close()
-    return rwl_text
+    x_old = np.linspace(0, 1, len(porosity_profile))
+    x_new = np.linspace(0, 1, req_len)
+    f = interp1d(x_old, porosity_profile, kind=interpolation_type)
+    return list(f(x_new))
 
 
-def getNormalisationPorosityProfile(porosityProfile: list, reqLen: int, interpolationtype='cubic') -> list:
-    """normalizes the porosity profile along the length in accordance with the conversion coefficient
-
-    Parameters
-    ----------
-    porosityProfile : List
-        porosity profile
-    reqLen : int
-        required porosity profile length
-    
-    Returns
-    -------
-    normProfile : List
-    """
-
-    original_length = len(porosityProfile)
-    x_old = np.linspace(0, 1, original_length)
-    x_new = np.linspace(0, 1, reqLen)
-
-    f = interp1d(x_old, porosityProfile, kind=interpolationtype)  # Можно попробовать 'cubic' для сглаживания
-    normProfile = list(f(x_new))
-
-    return normProfile
-
-def openFileAsDF(filePath: str, sep: str='\t'):
-    """
-
-    Parameters
-    ----------
-    filePath : List
-        porosity profile
-    
-    Returns
-    -------
-    normProfile : List
-    """
-    data = pd.read_csv(filePath, sep=sep)
-
-    return data
-
-def saveDFasTXT(data: pd.DataFrame, filePath: str, sep: str='\t') -> None:
-    """
-    Save DataFrame to save path
-
-    Parameters
-    ----------
-    data : pd.DataFrame
-        Saved data
-    filePath : str
-        save path
-    sep : str
-        separator
-        
-    """
-
-    data.to_csv(filePath, sep=sep)
-
-def saveListasTXT(data: list, filePath: str, colName: str='x', sep: str='\t') -> None:
-    """
-    Save list as DataFrame to save path
-
-    Parameters
-    ----------
-    data : list
-        Saved data
-    filePath : str
-        save path
-    colName : str
-        name of culumn
-    sep : str
-        separator
-        
-    """
-
-    data = pd.DataFrame({colName: data})
-    saveDFasTXT(data=data, filePath=filePath, sep=sep)
+# ---------------------------------------------------------------------------
+# Path / directory utilities
+# ---------------------------------------------------------------------------
 
 def initPath(path: str) -> None:
-    """
-    Create path, if not exist
+    """Create *path* (and any missing parents) if it does not exist."""
+    os.makedirs(path, mode=0o754, exist_ok=True)
 
-    Parameters
-    ----------
-    path : str
-        Path  
-    """
-
-    if not os.path.isdir(path):
-        os.mkdir(path, 0o754)
 
 def initDirTree(root: str, dirs: dict) -> None:
-    """
-    Create paths from "tree of directory".
-    The tree must have the format:
+    """Recursively create a directory tree described by *dirs*.
+
+    The tree format is a dictionary where each key is a directory name
+    and its value is a list of sub-directories (which can themselves be
+    dictionaries for deeper nesting)::
+
         {
-            'dir_1':
-                [
-                'sub_1_dir_1',
-                'sub_1_dir_2',
-                'sub_1_dir_3',
-                    ...
-                ],
-            'dir_2':
-                [
-                'sub_1_dir_1',
-                'sub_1_dir_2',
-                {
-                    'sub_1_dir_3':
-                        [
-                        'sub_2_dir_1',
-                        'sub_2_dir_2'
-                        ]
-                }
-                    ...
-                ],
-            'dir_1':
-                {
-                    'sub_1_dir_1':
-                        [
-                        'sub_2_dir_1',
-                        'sub_2_dir_2'
-                        ]
-                }
+            "dir_a": ["sub_1", "sub_2", {"sub_3": ["leaf_1"]}],
+            "dir_b": [],
         }
 
     Parameters
     ----------
     root : str
-        root of save path
-    dirs : dirt
-        tree of dirs
-        
+        Base path under which the tree is created.
+    dirs : dict
     """
-    initPath(path=root)
-
-    for d in dirs:
-        subPath = os.path.join(root, d)
-        initPath(path=subPath)
-
-        for subDir in dirs[d]:
-            if type(subDir) is dict:
-                initDirTree(root=subPath, dirs=subDir)
-                continue
-
-            initPath(path=os.path.join(subPath, subDir))
+    initPath(root)
+    for name, children in dirs.items():
+        sub_path = os.path.join(root, name)
+        initPath(sub_path)
+        for child in children:
+            if isinstance(child, dict):
+                initDirTree(sub_path, child)
+            else:
+                initPath(os.path.join(sub_path, child))
 
 
-def initResultsPathsFromImages(root: str, treesPath: str) -> None:
-    """
-    Create paths for results based on directories with photos of pictures
+def initResultsPathsFromImages(root: str, trees_path: str) -> None:
+    """Create the standard output directory tree for a scan run.
 
     Parameters
     ----------
     root : str
-        Path
-    treesPath: str
-        path to the directory with micrographs
-
+        Root of the results directory.
+    trees_path : str
+        Directory containing per-tree micrograph sub-directories.
     """
+    tree_names = sorted(os.listdir(trees_path))
+    dir_tree = {
+        "areaPorosity": tree_names,
+        "naturalValuesPorosity": [],
+        "normValuesPorosity": [],
+        "rawPorosity": [],
+        "rwl": [
+            "EW", "EWPOR", "LWPOR", "maxPorosity", "maxPorosityQ",
+            "meanPorosity", "meanPorosityQ", "minPorosity",
+            "minPorosityQ", "sectors", "rawPorosity",
+        ],
+        "sectorsPorosity": [],
+    }
+    initDirTree(root, dir_tree)
 
 
-    treesList = sorted(os.listdir(treesPath))
+def getTreeDirs(trees_path: str) -> dict[str, list[str]]:
+    """Build a mapping of tree sub-directory names → sorted image filenames.
 
-    dirTree = {}
-    dirTree.update({'areaPorosity': treesList})
-    dirTree.update({'naturalValuesPorosity': []})
-    dirTree.update({'normValuesPorosity': []})
-    dirTree.update({'rawPorosity': []})
-    dirTree.update({'rwl': [
-        'EW', 'EWPOR', 'LWPOR', 'maxPorosity', 'maxPorosityQ',
-        'meanPorosity', 'meanPorosityQ', 'minPorosity',
-        'minPorosityQ', 'sectors', 'rawPorosity'
-        ]})
-    dirTree.update({'sectorsPorosity': []})
-
-
-    initDirTree(root=root, dirs=dirTree)
-
-def getTreeDirs(treesPath: str) -> dict:
-    """
-    this method builds a tree of paths to the images
-    
-    Returns
+    Parameters
     ----------
-    treeDirs : dict
-         image path tree
+    trees_path : str
+        Directory containing per-tree sub-directories (integer-named).
+
+    Returns
+    -------
+    dict[str, list[str]]
+        ``{tree_id: [img_filename, ...]}`` sorted numerically.
     """
-    sortedSubDirNames = sorted(os.listdir(treesPath), key=lambda f: int(f))
-    treeDirs = {}
-
-    for d in sortedSubDirNames:
-        subDir = os.path.join(treesPath, d)
-        sortedImgNames = sorted(os.listdir(subDir), key=lambda f: int(f.split('.')[0]))
-        treeDirs.update({d : sortedImgNames})
-
-    return treeDirs
+    sub_dir_names = sorted(os.listdir(trees_path), key=int)
+    return {
+        d: sorted(
+            os.listdir(os.path.join(trees_path, d)),
+            key=lambda f: int(f.split(".")[0]),
+        )
+        for d in sub_dir_names
+    }
