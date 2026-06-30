@@ -573,6 +573,7 @@ class PICDens:
 
     def _save_config(self) -> None:
         """Persist the current configuration to ``config.txt``."""
+        initPath(self.save_path)
         save_df(pd.Series({
             "savePath":   self.save_path,
             "root":       self.root,
