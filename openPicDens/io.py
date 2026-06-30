@@ -28,7 +28,7 @@ def read_df(file_path: str, sep: str = "\t") -> pd.DataFrame:
     return pd.read_csv(file_path, sep=sep)
 
 
-def save_df(data: pd.DataFrame, file_path: str, sep: str = "\t") -> None:
+def save_df(data: pd.DataFrame, file_path: str, sep: str = "\t", index: bool = False) -> None:
     """Save *data* to a delimited text file.
 
     Parameters
@@ -37,8 +37,15 @@ def save_df(data: pd.DataFrame, file_path: str, sep: str = "\t") -> None:
     file_path : str
     sep : str
         Column separator (default: tab).
+    index : bool
+        Whether to write the DataFrame index as a column (default:
+        ``False``). Writing the index produces an unnamed leading
+        column that pandas re-reads as ``"Unnamed: 0"`` — if that file
+        is later fed into :func:`rw2rwl`, the index gets treated as an
+        extra tree/core series. Keep this ``False`` unless the index
+        carries meaningful data you intend to preserve.
     """
-    data.to_csv(file_path, sep=sep)
+    data.to_csv(file_path, sep=sep, index=index)
 
 
 def save_list(
@@ -98,6 +105,13 @@ def rw2rwl(
     rwl_lines: list[str] = []
 
     for col in sorted(data.columns):
+        # Skip pandas' auto-generated index column ("Unnamed: 0", "Unnamed: 0.1",
+        # etc.), which appears when reading a file that was saved with its
+        # DataFrame index included (see save_df). Without this guard the row
+        # index gets written out as if it were an extra tree/core series.
+        if str(col).startswith("Unnamed"):
+            continue
+
         values = [
             str(int(v))
             for v in data[col].tolist()
@@ -120,6 +134,8 @@ def rw2rwl(
         while remaining:
             year_chunk = []
             for _ in range(start_dec, end_dec + 1):
+                if not remaining:
+                    break
                 year_chunk.insert(0, remaining.pop(0))
 
             values_str = "".join(f"{v:>6}" for v in year_chunk)
