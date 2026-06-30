@@ -18,6 +18,7 @@ dendrochronological analysis::
 
 from __future__ import annotations
 
+import logging
 import os
 from itertools import groupby
 from statistics import mean, median
@@ -39,6 +40,8 @@ from .utils import (
     pad_dict_list,
     smaDF,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PICDens:
@@ -117,8 +120,23 @@ class PICDens:
     # ------------------------------------------------------------------
 
     def startScan(self) -> None:
-        """Run a full scan of all tree directories and write results."""
+        """Run a full scan of all tree directories and write results.
+
+        Progress is reported via the module logger (``openPicDens.analysis``).
+        Configure logging in the calling application to see messages, e.g.::
+
+            import logging
+            logging.basicConfig(level=logging.INFO)
+
+        To integrate with a GUI, attach a custom :class:`logging.Handler`
+        to ``logging.getLogger("openPicDens.analysis")`` instead of
+        relying on stdout.
+        """
         trees = getTreeDirs(self.root)
+        n_trees = len(trees)
+        logger.info("Starting scan: %d tree director%s found in %r",
+                    n_trees, "y" if n_trees == 1 else "ies", self.root)
+
         paths = self._build_save_paths()
         initResultsPathsFromImages(root=self.save_path, trees_path=self.root)
 
@@ -132,10 +150,16 @@ class PICDens:
         raw_acc: dict[str, pd.DataFrame] = {}
         sectors_acc: list[dict] = [{} for _ in range(self._N_SECTORS)]
 
-        for tree_id, img_names in trees.items():
+        for tree_idx, (tree_id, img_names) in enumerate(trees.items(), start=1):
             tree_dir = os.path.join(self.root, tree_id)
+            logger.info("[%d/%d] Scanning tree %r (%d images)",
+                        tree_idx, n_trees, tree_id, len(img_names))
 
             porosity_df = self.scanSubDir(tree_dir, img_names)
+            if porosity_df.empty:
+                logger.warning("Tree %r produced no usable porosity data "
+                                "(empty profile) - skipping derived metrics",
+                                tree_id)
             porosity_sma = smaDF(porosity_df, self.sma_interval)
             raw_acc[tree_id] = porosity_sma
 
@@ -161,6 +185,7 @@ class PICDens:
             save_df(porosity_df, os.path.join(paths["raw"], f"{tree_id}.txt"))
 
         # Long profiles
+        logger.info("Building long-term multi-tree profiles...")
         _, long_df, avg, zlong_df, zlong_dict, zavg = \
             self.getLongPorosityProfile(raw_acc, "normNumber")
         avg  = self.getNormPorosityProfiles(avg)
@@ -208,6 +233,9 @@ class PICDens:
         for key, (rwl_path, coef) in rwl_map.items():
             rw2rwl(dfs[key], rwl_path, end_year=self.year_start, coef=coef)
 
+        logger.info("Scan complete: %d tree(s) processed, results written to %r",
+                    n_trees, self.save_path)
+
     def scanSubDir(self, sub_dir: str, img_names: list[str]) -> pd.DataFrame:
         """Scan all images in *sub_dir* and return per-year porosity profiles."""
         porosity_by_year: dict[int, list] = {}
@@ -218,9 +246,12 @@ class PICDens:
         sd_dir = os.path.join(self.save_path, SAVE_PATHS["sd_porosity_path"], tree_id)
         initPath(sd_dir)
 
-        for img_name in img_names:
+        n_imgs = len(img_names)
+        for img_idx, img_name in enumerate(img_names, start=1):
             ring_n = int(img_name.split(".")[0])
             img_path = os.path.join(sub_dir, img_name)
+            logger.debug("  [%d/%d] tree=%s ring=%d -> %s",
+                         img_idx, n_imgs, tree_id, ring_n, img_path)
 
             porosity_df = self.scanImg(img_path)
             # porosity_df["finalPorosityProfile"] = porosity_df.mean(axis=1)
@@ -248,7 +279,7 @@ class PICDens:
         windows_number: int = 5,
     ) -> pd.DataFrame:
         """Scan *img_path* with a sliding window and return porosity profiles."""
-        print(f"[INFO] Scanning {img_path}")
+        logger.debug("Scanning %s", img_path)
         bi_img = self._load_binary_img(img_path)
 
         profiles: dict[int, list] = {}
@@ -574,6 +605,8 @@ class PICDens:
     def _save_config(self) -> None:
         """Persist the current configuration to ``config.txt``."""
         initPath(self.save_path)
+        logger.debug("Writing config.txt to %r (species=%r, binarizer=%r)",
+                     self.save_path, self.species_name, repr(self.binarizer))
         save_df(pd.Series({
             "savePath":   self.save_path,
             "root":       self.root,
