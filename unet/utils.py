@@ -74,8 +74,11 @@ def cutAndPadImg(
     img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=interpolation)
 
     orig_h, orig_w = img.shape
-    pad_right = (orig_w // size + 1) * size - orig_w
-    pad_bottom = (orig_h // size + 1) * size - orig_h
+    # Pad up to the next multiple of `size`. Using -orig_w % size (instead of
+    # (orig_w // size + 1) * size - orig_w) avoids adding a whole extra row/
+    # column of tiles when orig_w/orig_h is already an exact multiple of size.
+    pad_right = (-orig_w) % size
+    pad_bottom = (-orig_h) % size
     padded = np.pad(img, ((0, pad_bottom), (0, pad_right)), constant_values=0)
 
     tiles: list[np.ndarray] = []
@@ -223,9 +226,25 @@ def joinDivideImgs(
     np.ndarray
         Reconstructed image cropped to ``(orig_h, orig_w)``.
     """
+    if not tiles:
+        raise ValueError(
+            "joinDivideImgs received an empty tile list — nothing to "
+            "reassemble. Check that cutAndPadImg / make_predictions "
+            "produced at least one tile."
+        )
+
     size = tiles[0].shape[0]
     padded_w = orig_w + pad_right
     tiles_per_row = padded_w // size
+
+    if tiles_per_row == 0 or len(tiles) % tiles_per_row != 0:
+        raise ValueError(
+            f"Tile count ({len(tiles)}) is not consistent with "
+            f"tiles_per_row ({tiles_per_row}) computed from orig_w="
+            f"{orig_w}, pad_right={pad_right}, tile size={size}. This "
+            "usually means the padding/tiling parameters used to "
+            "produce `tiles` do not match orig_w/pad_right passed here."
+        )
 
     rows: list[np.ndarray] = []
     for row_idx in range(len(tiles) // tiles_per_row):
