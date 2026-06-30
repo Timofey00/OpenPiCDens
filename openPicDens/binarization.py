@@ -117,6 +117,9 @@ class Binarizer:
                 img, None, fx=self.scale, fy=self.scale,
                 interpolation=cv2.INTER_CUBIC,
             )
+        # Convert to grayscale before any single-channel operations
+        if img.ndim == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         if self.gamma_equalisation:
             img = cv2.equalizeHist(img)
 
@@ -154,7 +157,7 @@ class Binarizer:
     # ------------------------------------------------------------------
 
     def _apply_blur(self, img: np.ndarray) -> np.ndarray:
-        """Apply the configured blur to *img*."""
+        """Apply the configured blur to *img* (expects grayscale input)."""
         if self.blur == "Gaussian":
             return cv2.GaussianBlur(img, (self.ksize, self.ksize), 0)
         if self.blur == "Median":
@@ -162,11 +165,16 @@ class Binarizer:
         if self.blur == "NBF":
             return cv2.blur(img, (self.ksize, self.ksize))
         if self.blur == "Bilateral":
+            # bilateralFilter accepts single-channel images
             return cv2.bilateralFilter(img, 11, 41, 21)
         return img
 
     def _apply_threshold(self, img: np.ndarray, img_path: str) -> np.ndarray:
-        """Apply the configured thresholding method to *img*."""
+        """Apply the configured thresholding method to *img* (expects grayscale)."""
+        # Ensure single-channel at threshold stage
+        if img.ndim == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
         if self.method == "Otsu":
             _, bi = cv2.threshold(
                 img, 230, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU
