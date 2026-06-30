@@ -194,7 +194,7 @@ class Binarizer:
             return (img > thresh).astype(np.uint8) * 255
 
         if self.method == "UNET":
-            from unet.utills import predictImgMask
+            from unet.utils import predictImgMask
             bi = predictImgMask(
                 img_path=img_path,
                 save_mask_path=None,

@@ -19,7 +19,7 @@ import torch
 
 from openPicDens import Binarizer, PICDens
 from unet.train import train
-from unet.utills import predictImgMask
+from unet.utils import predictImgMask
 from unet.preprocessing import tile_image_mask_pairs
 
 
