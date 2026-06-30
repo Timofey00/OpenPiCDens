@@ -1,38 +1,34 @@
-# import the necessary packages
 from torch.utils.data import Dataset
 import cv2
 
+
 class SegmentationDataset(Dataset):
-    def __init__(self, imagePaths, maskPaths, transforms):
-        # store the image and mask filepaths, and augmentation
-        # transforms
+    def __init__(self, imagePaths, maskPaths, transforms, mask_transforms=None):
         self.imagePaths = imagePaths
         self.maskPaths = maskPaths
         self.transforms = transforms
+        # If no dedicated mask pipeline is given, fall back to the image one.
+        # Providing a separate pipeline is recommended so that mask pixels are
+        # resized with NEAREST interpolation (preserving binary 0/255 values)
+        # and so that ToPILImage cannot accidentally promote a (H,W) uint8
+        # array to RGB mode, which would cause a channel mismatch with the
+        # 1-channel model output.
+        self.mask_transforms = mask_transforms if mask_transforms is not None else transforms
 
     def __len__(self):
-        # return the number of total samples contained in the dataset
         return len(self.imagePaths)
 
     def __getitem__(self, idx):
-        # grab the image path from the current index
-        imagePath = self.imagePaths[idx]
-        
-        # load the image from disk, swap its channels from BGR to RGB,
-        # and read the associated mask from disk in grayscale mode
-        image = cv2.imread(imagePath)
-        # image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        # image = image.transpose((2, 0, 1))
+        # load image as grayscale (H, W)
+        image = cv2.imread(self.imagePaths[idx])
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # load mask as grayscale (H, W); flag 0 = IMREAD_GRAYSCALE
         mask = cv2.imread(self.maskPaths[idx], 0)
-        mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
 
-        # check to see if we are applying any transformations
         if self.transforms is not None:
-
-            # apply the transformations to both image and its mask
             image = self.transforms(image)
-            mask = self.transforms(mask)
+        if self.mask_transforms is not None:
+            mask = self.mask_transforms(mask)
 
-        # return a tuple of the image and its mask
         return (image, mask)

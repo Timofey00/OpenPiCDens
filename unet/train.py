@@ -1,193 +1,211 @@
-# USAGE
-# python train.py
-# import the necessary packages
 from unet.dataset import SegmentationDataset
 from torch.nn import BCEWithLogitsLoss
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
-from torchvision import transforms, models
-from torchvision.models.detection import maskrcnn_resnet50_fpn
+from torchvision import transforms
 from imutils import paths
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import torch
 import time
-import os
 import segmentation_models_pytorch as smp
-from segmentation_models_pytorch.encoders import get_preprocessing_fn
 
 
 def train(
-    imgsPath: str, 
-    maskPath: str, 
-    outputPath: str, 
-    saveModelPath: str, 
-    INPUT_IMAGE_WIDTH: int, 
-    INPUT_IMAGE_HEIGHT: int, 
-    TEST_SPLIT: float | int, 
-    BATCH_SIZE: int, 
-    DEVICE: str, 
-    PIN_MEMORY: bool, 
-    INIT_LR: float | int, 
-    NUM_EPOCHS: int
-    ) -> smp.Unet:
-    """
-    function for model training
+    imgs_path: str,
+    mask_path: str,
+    output_path: str,
+    save_model_path: str,
+    input_image_width: int,
+    input_image_height: int,
+    test_split: float | int,
+    batch_size: int,
+    device: str,
+    pin_memory: bool,
+    init_lr: float | int,
+    num_epochs: int,
+) -> smp.Unet:
+    """Train a U-Net segmentation model on wood micrograph image–mask pairs.
 
     Parameters
     ----------
-    imgsPath: str
-        images path
-    maskPath: str
-        masks path
-    outputPath: str
-        path for information file
-    saveModelPath: str
-        path for save model
-    INPUT_IMAGE_WIDTH: int
-        image width
-    INPUT_IMAGE_HEIGHT: int
-        image height
-    TEST_SPLIT: float | int
-        test image fraction
-    BATCH_SIZE: int
-        batch size
-    DEVICE: str
-        device
-    PIN_MEMORY: bool
-        If True, the data loader will copy tensors into CUDA pinned memory before returning them
-    INIT_LR: float | int
-        learning rate
-    NUM_EPOCHS: int
-        number of epochs
+    imgs_path : str
+        Directory containing training images (.jpg).
+    mask_path : str
+        Directory containing binary mask images (.png).
+    output_path : str
+        Directory where the loss plot is saved.
+    save_model_path : str
+        File path for saving the best model checkpoint (.pth).
+    input_image_width : int
+        Width to which images are resized before training.
+    input_image_height : int
+        Height to which images are resized before training.
+    test_split : float
+        Fraction of data held out for validation (e.g. ``0.15``).
+    batch_size : int
+        Number of samples per gradient update.
+    device : str
+        PyTorch device string: ``"cuda"`` or ``"cpu"``.
+    pin_memory : bool
+        If ``True``, DataLoader copies tensors into CUDA pinned memory.
+        Automatically disabled when running on CPU to avoid deadlocks on
+        Windows (PyTorch attempts to allocate CUDA pinned memory even on
+        CPU-only machines, which blocks indefinitely).
+    init_lr : float
+        Initial learning rate for the Adam optimiser.
+    num_epochs : int
+        Number of training epochs.
 
     Returns
-    ----------
-    bestModel: smp.Unet
-        least-loss model
+    -------
+    smp.Unet
+        The model checkpoint with the lowest validation loss.
+    """
+    # pin_memory is only meaningful (and safe) when a CUDA device is available;
+    # on CPU-only Windows machines it causes the DataLoader to deadlock.
+    cuda_available = torch.cuda.is_available()
+    if pin_memory and not cuda_available:
+        print("[WARNING] pin_memory=True requested but CUDA is not available. "
+              "Disabling pin_memory to prevent DataLoader deadlock on Windows.")
+        pin_memory = False
 
-    """ 
     # load the image and mask filepaths in a sorted manner
-    imagePaths = sorted(list(paths.list_images(imgsPath)))
-    maskPaths = sorted(list(paths.list_images(maskPath)))
+    imagePaths = sorted(list(paths.list_images(imgs_path)))
+    maskPaths = sorted(list(paths.list_images(mask_path)))
 
-    # partition the data into training and testing splits using 85% of
-    # the data for training and the remaining 15% for testing
+    # partition the data into training and testing splits
     split = train_test_split(imagePaths, maskPaths,
-    	test_size=TEST_SPLIT, random_state=42)
+        test_size=test_split, random_state=42)
 
     # unpack the data split
     (trainImages, testImages) = split[:2]
     (trainMasks, testMasks) = split[2:]
 
-    # define transformations
-    transforms_ = transforms.Compose([transforms.ToPILImage(),
-        transforms.Resize((INPUT_IMAGE_HEIGHT,
-            INPUT_IMAGE_WIDTH)),
-        transforms.ToTensor()])
+    # Transforms for input images (grayscale numpy HxW -> tensor 1xHxW)
+    img_transforms = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize((input_image_height, input_image_width)),
+        transforms.ToTensor(),
+    ])
+
+    # Transforms for masks: NEAREST interpolation preserves binary 0/255 values;
+    # separate pipeline prevents ToPILImage from promoting (H,W) uint8 to RGB
+    # in some torchvision versions, which would cause a channel mismatch.
+    mask_transforms = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize(
+            (input_image_height, input_image_width),
+            interpolation=transforms.InterpolationMode.NEAREST,
+        ),
+        transforms.ToTensor(),
+    ])
 
     # create the train and test datasets
-    trainDS = SegmentationDataset(imagePaths=trainImages, maskPaths=trainMasks,
-        transforms=transforms_)
-
-    testDS = SegmentationDataset(imagePaths=testImages, maskPaths=testMasks,
-        transforms=transforms_)
+    trainDS = SegmentationDataset(
+        imagePaths=trainImages, maskPaths=trainMasks,
+        transforms=img_transforms, mask_transforms=mask_transforms,
+    )
+    testDS = SegmentationDataset(
+        imagePaths=testImages, maskPaths=testMasks,
+        transforms=img_transforms, mask_transforms=mask_transforms,
+    )
 
     print(f"[INFO] found {len(trainDS)} examples in the training set...")
     print(f"[INFO] found {len(testDS)} examples in the test set...")
 
-    # create the training and test data loaders
+    # num_workers=0: load data in the main process.
+    # On Windows, num_workers > 0 uses the "spawn" multiprocessing start
+    # method, which requires all DataLoader usage to be inside
+    # `if __name__ == "__main__"`. Since train() is called as a library
+    # function, workers > 0 would cause a silent hang or recursive process
+    # spawning. Use 0 for safety; increase only if profiling shows I/O is
+    # the bottleneck and the call site is properly guarded.
     trainLoader = DataLoader(trainDS, shuffle=True,
-        batch_size=BATCH_SIZE, pin_memory=PIN_MEMORY,)
-
+        batch_size=batch_size, pin_memory=pin_memory, num_workers=0)
     testLoader = DataLoader(testDS, shuffle=False,
-        batch_size=BATCH_SIZE, pin_memory=PIN_MEMORY,)
+        batch_size=batch_size, pin_memory=pin_memory, num_workers=0)
 
     # initialize our UNet model
-    # unet = maskrcnn_resnet50_fpn(weights='DEFAULT').to(config.DEVICE)
-    isMarkCNN = True
+    # NOTE: encoder_weights="imagenet" triggers a ResNet-34 download on first
+    # run (~90 MB). The model is kept on CPU until training starts; .to(device)
+    # is called on tensors per-batch to avoid a slow CUDA init at startup.
+    print(f"[INFO] loading U-Net (encoder weights may be downloaded on first run)...")
     unet = smp.Unet(
-        encoder_name="resnet34",        # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
-        encoder_weights="imagenet",     # use `imagenet` pre-trained weights for encoder initialization
-        in_channels=1,                  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
-        classes=3,                    # model output channels (number of classes in your dataset)
+        encoder_name="resnet34",
+        encoder_weights="imagenet",
+        in_channels=1,   # grayscale micrographs
+        classes=1,       # binary segmentation: pore / not-pore
     )
+    unet = unet.to(device)
+    print(f"[INFO] model ready on {device}.")
 
     # initialize loss function and optimizer
     lossFunc = BCEWithLogitsLoss()
-    opt = Adam(unet.parameters(), lr=INIT_LR)
+    opt = Adam(unet.parameters(), lr=init_lr)
 
     # calculate steps per epoch for training and test set
-    trainSteps = len(trainDS) // BATCH_SIZE
-    testSteps = len(testDS) // BATCH_SIZE
+    trainSteps = len(trainDS) // batch_size
+    testSteps = len(testDS) // batch_size
 
     # initialize a dictionary to store training history
     H = {"train_loss": [], "test_loss": []}
 
     # loop over epochs
     print("[INFO] training the network...")
-
     startTime = time.time()
 
-    bestTestLoss = 100
+    bestTestLoss = float("inf")
     bestModel = None
 
-    for e in tqdm(range(NUM_EPOCHS)):
+    for e in tqdm(range(num_epochs), desc="Epochs"):
         # set the model in training mode
         unet.train()
 
-        # initialize the total training and validation loss
         totalTrainLoss = 0
         totalTestLoss = 0
 
         # loop over the training set
-        for (i, (x, y)) in enumerate(trainLoader):
-            # send the input to the device
-            (x, y) = (x.to(DEVICE), y.to(DEVICE))
-            # perform a forward pass and calculate the training loss
+        trainBar = tqdm(trainLoader, desc=f"  Epoch {e+1}/{num_epochs} train",
+                        leave=False, unit="batch")
+        for (x, y) in trainBar:
+            (x, y) = (x.to(device), y.to(device))
             pred = unet(x)
             loss = lossFunc(pred, y)
 
-            # first, zero out any previously accumulated gradients, then
-            # perform backpropagation, and then update model parameters
             opt.zero_grad()
             loss.backward()
             opt.step()
 
-            # add the loss to the total training loss so far
             totalTrainLoss += loss
+            trainBar.set_postfix(loss=f"{loss.item():.4f}")
 
         # switch off autograd
         with torch.no_grad():
-
-            # set the model in evaluation mode
             unet.eval()
 
             # loop over the validation set
-            for (i, (x, y)) in enumerate(trainLoader):
-                # send the input to the device
-                (x, y) = (x.to(DEVICE), y.to(DEVICE))
-
-                # make the predictions and calculate the validation loss
+            valBar = tqdm(testLoader, desc=f"  Epoch {e+1}/{num_epochs} val  ",
+                          leave=False, unit="batch")
+            for (x, y) in valBar:
+                (x, y) = (x.to(device), y.to(device))
                 pred = unet(x)
-                # print(pred.shape, y.shape)
                 totalTestLoss += lossFunc(pred, y)
 
         # calculate the average training and validation loss
         avgTrainLoss = totalTrainLoss / trainSteps
         avgTestLoss = totalTestLoss / testSteps
 
-        if bestTestLoss >  avgTestLoss:
+        if avgTestLoss < bestTestLoss:
             bestModel = unet
             bestTestLoss = avgTestLoss
 
         # update our training history
-        H["train_loss"].append(avgTrainLoss.detach().numpy())
-        H["test_loss"].append(avgTestLoss.detach().numpy())
+        H["train_loss"].append(avgTrainLoss.detach().cpu().numpy())
+        H["test_loss"].append(avgTestLoss.detach().cpu().numpy())
 
-        # print the model training and validation information
-        print("[INFO] EPOCH: {}/{}".format(e + 1, NUM_EPOCHS))
+        print("[INFO] EPOCH: {}/{}".format(e + 1, num_epochs))
         print("Train loss: {:.6f}, Test loss: {:.4f}".format(
             avgTrainLoss, avgTestLoss))
 
@@ -196,7 +214,7 @@ def train(
     print("[INFO] total time taken to train the model: {:.2f}s".format(
         endTime - startTime))
 
-    torch.save(bestModel, saveModelPath)
+    torch.save(bestModel, save_model_path)
 
     # plot the training loss
     plt.style.use("ggplot")
@@ -207,5 +225,5 @@ def train(
     plt.xlabel("Epoch #")
     plt.ylabel("Loss")
     plt.legend(loc="lower left")
-    plt.savefig(outputPath + 'lossPlot.jpeg')
+    plt.savefig(output_path + "lossPlot.jpeg")
     return bestModel
