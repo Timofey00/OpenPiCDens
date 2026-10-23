@@ -1,4 +1,18 @@
 __pycache__/
 venv/
-scr.py
 /models
+/scripts
+scr.py
+debug.py
+cvat_parser.py
+newTrain.py
+
+# Local working notes
+/tracheid_metrics/*.md
+
+# GUI logs when run from source (tracheid_gui/app_logging.py)
+/logs/
+
+# PyInstaller build log, Git Bash crash dumps
+/build_exe/build.log
+*.stackdump
