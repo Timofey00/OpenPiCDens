@@ -7,8 +7,6 @@ chronologies to Tucson dendrochronology (RWL) format.
 
 from __future__ import annotations
 
-from math import floor
-
 import pandas as pd
 
 
@@ -81,7 +79,8 @@ def rw2rwl(
     """Convert a DataFrame to Tucson dendrochronology (RWL) format and save it.
 
     Each column is treated as one tree/core series.  Values are written
-    in decade blocks from the most-recent year backwards.
+    oldest year first: the first row from the series' first year to the end of
+    its decade, then one row per decade.
 
     Parameters
     ----------
@@ -105,47 +104,47 @@ def rw2rwl(
     rwl_lines: list[str] = []
 
     for col in sorted(data.columns):
-        # Skip pandas' auto-generated index column ("Unnamed: 0", "Unnamed: 0.1",
-        # etc.), which appears when reading a file that was saved with its
-        # DataFrame index included (see save_df). Without this guard the row
-        # index gets written out as if it were an extra tree/core series.
+        # Skip pandas' auto-generated index column ("Unnamed: 0", etc.)
         if str(col).startswith("Unnamed"):
             continue
 
-        values = [
-            str(int(v))
+        raw_values = [
+            int(v)
             for v in data[col].tolist()
             if str(v) != "nan"
         ]
-        if not values:
+        if not raw_values:
             continue
 
-        start_year = end_year - len(values) + 1
-        end_dec = end_year
-        start_dec = (
-            int(floor(end_dec / 10) * 10)
-            if len(values) > 6
-            else end_dec - len(values) + 1
-        )
-        remaining = list(values)
-        col_str = col.replace(" ", "")
+        col_str = str(col).replace(" ", "")
+        start_year = end_year - len(raw_values) + 1
+
+        # Build year → value mapping (rows are ordered newest → oldest)
+        year_val: dict[int, int] = {
+            end_year - i: raw_values[i]
+            for i in range(len(raw_values))
+        }
+
         block_lines: list[str] = []
+        current_year = start_year
 
-        while remaining:
-            year_chunk = []
-            for _ in range(start_dec, end_dec + 1):
-                if not remaining:
-                    break
-                year_chunk.insert(0, remaining.pop(0))
+        while current_year <= end_year:
+            row_start = current_year
+            # First row ends at the decade boundary; subsequent rows are full decades
+            if current_year == start_year and current_year % 10 != 0:
+                row_end = min((current_year // 10) * 10 + 9, end_year)
+            else:
+                row_end = min(current_year + 9, end_year)
 
+            year_chunk = [str(year_val[y]) for y in range(row_start, row_end + 1)]
             values_str = "".join(f"{v:>6}" for v in year_chunk)
-            line = f"{col_str:<8}{start_dec}{values_str}"
-            if end_dec == end_year:
-                line += "  -9999"
-            block_lines.insert(0, line)
-
-            end_dec = start_dec - 1
-            start_dec = max(start_year, start_dec - 10)
+            line = f"{col_str:<8}{row_start}{values_str}"
+            if row_end == end_year and len(year_chunk) < 10:
+                line += f"{'-9999':>6}"
+            block_lines.append(line)
+            if row_end == end_year and len(year_chunk) == 10:
+                block_lines.append(f"{col_str:<8}{end_year + 1}{'-9999':>6}")
+            current_year = row_end + 1
 
         rwl_lines.extend(block_lines)
 
