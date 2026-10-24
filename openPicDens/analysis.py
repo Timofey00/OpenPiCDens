@@ -149,19 +149,26 @@ class PICDens:
         }
         raw_acc: dict[str, pd.DataFrame] = {}
         sectors_acc: list[dict] = [{} for _ in range(self._N_SECTORS)]
+        win_sd_all: list[float] = []
+        win_se_all: list[float] = []
+        win_corr_all: list[float] = []
 
         for tree_idx, (tree_id, img_names) in enumerate(trees.items(), start=1):
             tree_dir = os.path.join(self.root, tree_id)
             logger.info("[%d/%d] Scanning tree %r (%d images)",
                         tree_idx, n_trees, tree_id, len(img_names))
 
-            porosity_df = self.scanSubDir(tree_dir, img_names)
+            porosity_df, win_sd, win_se, win_corr = self.scanSubDir(tree_dir, img_names)
             if porosity_df.empty:
                 logger.warning("Tree %r produced no usable porosity data "
                                 "(empty profile) - skipping derived metrics",
                                 tree_id)
             porosity_sma = smaDF(porosity_df, self.sma_interval)
             raw_acc[tree_id] = porosity_sma
+
+            win_sd_all.extend(win_sd)
+            win_se_all.extend(win_se)
+            win_corr_all.extend(win_corr)
 
             acc["rw"][tree_id] = self.getRW(porosity_df)
             acc["maxP"][tree_id], acc["minP"][tree_id], acc["meanP"][tree_id] = \
@@ -207,6 +214,10 @@ class PICDens:
         for key, txt_path in save_map.items():
             save_df(dfs[key], txt_path)
 
+        save_df(pd.DataFrame({"SD": win_sd_all}), paths["winSD"])
+        save_df(pd.DataFrame({"SE": win_se_all}), paths["winSE"])
+        save_df(pd.DataFrame({"corr": win_corr_all}), paths["winCorr"])
+
         save_df(long_df, paths["long"])
         save_df(zlong_df, paths["zlong"])
         save_df(avg, paths["avg"])
@@ -236,11 +247,25 @@ class PICDens:
         logger.info("Scan complete: %d tree(s) processed, results written to %r",
                     n_trees, self.save_path)
 
-    def scanSubDir(self, sub_dir: str, img_names: list[str]) -> pd.DataFrame:
-        """Scan all images in *sub_dir* and return per-year porosity profiles."""
+    def scanSubDir(
+        self, sub_dir: str, img_names: list[str]
+    ) -> tuple[pd.DataFrame, list[float], list[float], list[float]]:
+        """Scan all images in *sub_dir* and return per-year porosity profiles.
+
+        Returns
+        -------
+        tuple[pd.DataFrame, list[float], list[float], list[float]]
+            The per-year porosity profiles, plus one inter-window ``SD``,
+            ``SE``, and mean pairwise Pearson correlation value per scanned
+            ring (one flat list each, in scan order) - see
+            :meth:`getWindowStatistics`.
+        """
         porosity_by_year: dict[int, list] = {}
         porosity_sd: dict[int, list] = {}
         porosity_sma_sd: dict[int, list] = {}
+        win_sd_list: list[float] = []
+        win_se_list: list[float] = []
+        win_corr_list: list[float] = []
 
         tree_id = os.path.basename(sub_dir.rstrip("/\\"))
         sd_dir = os.path.join(self.save_path, SAVE_PATHS["sd_porosity_path"], tree_id)
@@ -253,8 +278,12 @@ class PICDens:
             logger.debug("  [%d/%d] tree=%s ring=%d -> %s",
                          img_idx, n_imgs, tree_id, ring_n, img_path)
 
-            porosity_df = self.scanImg(img_path)
+            porosity_df, window_stats = self.scanImg(img_path)
             # porosity_df["finalPorosityProfile"] = porosity_df.mean(axis=1)
+
+            win_sd_list.append(window_stats["summary"]["SD"].mean())
+            win_se_list.append(window_stats["summary"]["SE"].mean())
+            win_corr_list.append(self._meanOffDiagonal(window_stats["corr"]))
 
             sd_list, sma_sd_list, porosity_df = self.getSD(
                 porosity_df=porosity_df, n_tree=ring_n, save_path=sd_dir,
@@ -269,7 +298,10 @@ class PICDens:
                 os.path.join(sd_dir, f"{tree_id}_SD.txt"))
         save_df(pd.DataFrame(pad_dict_list(porosity_sma_sd)),
                 os.path.join(sd_dir, f"{tree_id}_SMA_SD.txt"))
-        return pd.DataFrame(pad_dict_list(porosity_by_year))
+        return (
+            pd.DataFrame(pad_dict_list(porosity_by_year)),
+            win_sd_list, win_se_list, win_corr_list,
+        )
 
     def scanImg(
         self,
@@ -277,8 +309,16 @@ class PICDens:
         window_size: int = 1000,
         step: int = 200,
         windows_number: int = 5,
-    ) -> pd.DataFrame:
-        """Scan *img_path* with a sliding window and return porosity profiles."""
+    ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+        """Scan *img_path* with a sliding window and return porosity profiles.
+
+        Returns
+        -------
+        tuple[pd.DataFrame, dict[str, pd.DataFrame]]
+            The per-window porosity profiles (plus the averaged
+            ``finalPorosityProfile`` column), and the inter-window
+            statistics from :meth:`getWindowStatistics`.
+        """
         logger.debug("Scanning %s", img_path)
         bi_img = self._load_binary_img(img_path)
 
@@ -288,11 +328,39 @@ class PICDens:
         else:
             for i in range(windows_number):
                 fragment = bi_img[i * step: i * step + window_size]
+                if fragment.size == 0:
+                    logger.debug("  Window %d is empty (image height %d < offset %d), skipping",
+                                 i, bi_img.shape[0], i * step)
+                    continue
                 profiles[i] = self.getPorosityProfileToPix(fragment)
 
         df = pd.DataFrame(profiles)
+        window_stats = self.getWindowStatistics(df)
         df["finalPorosityProfile"] = df.mean(axis=1)
-        return df
+        return df, window_stats
+
+    def getWindowStatistics(self, windows_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        """Compute SD, SE, and pairwise Pearson correlation across window curves.
+
+        *windows_df* holds one porosity curve per sliding window - the
+        columns produced by :meth:`scanImg` before the averaged
+        ``finalPorosityProfile`` column is added.
+
+        Returns
+        -------
+        dict[str, pd.DataFrame]
+            ``"summary"``: one row per window with its ``SD`` (standard
+            deviation of the curve's values) and ``SE`` (standard error,
+            ``SD / sqrt(n)``).
+            ``"corr"``: the window x window Pearson correlation matrix
+            between curves (inter-series correlation).
+        """
+        sd = windows_df.std()
+        se = sd / np.sqrt(windows_df.count())
+        summary = pd.DataFrame({"SD": sd, "SE": se})
+        summary.index.name = "window"
+        corr = windows_df.corr(method="pearson")
+        return {"summary": summary, "corr": corr}
 
     def getPorosityProfileToPix(self, bi_img: np.ndarray) -> list[float]:
         """Compute a pixel-resolution porosity profile from *bi_img*."""
@@ -301,6 +369,10 @@ class PICDens:
         for row in transposed:
             if self.gap_value:
                 row = self.gapFilter(row)
+            if len(row) == 0:
+                # gapFilter removed all pixels (entire column was white gaps)
+                profile.append(0.0)
+                continue
             profile.append(float(np.sum(row == 255)) / len(row))
         return profile
 
@@ -546,6 +618,15 @@ class PICDens:
             return bi
         return self.binarizer.binarize(img_path)
 
+    @staticmethod
+    def _meanOffDiagonal(corr: pd.DataFrame) -> float:
+        """Mean pairwise Pearson correlation, excluding the diagonal."""
+        n = corr.shape[0]
+        if n < 2:
+            return -1.0
+        mask = ~np.eye(n, dtype=bool)
+        return float(corr.values[mask].mean())
+
     def _extract_year_stats(
         self, porosity_profiles: pd.DataFrame, stat_keys: tuple[str, ...]
     ) -> tuple[list, ...]:
@@ -574,6 +655,7 @@ class PICDens:
         sp = self.save_path
         rwl_dir = os.path.join(sp, "rwl")
         sec_dir = os.path.join(sp, SAVE_PATHS["sec_path"])
+        win_dir = os.path.join(sp, SAVE_PATHS["windows_stats_path"])
 
         def p(name: str) -> str:
             return os.path.join(sp, SAVE_NAMES[name])
@@ -591,6 +673,9 @@ class PICDens:
             "ewpr": p("ewpr"), "lwpr": p("lwpr"),
             "ewp": p("ewp"), "lwp": p("lwp"),
             "long": p("long"), "zlong": p("zlong"), "avg": p("avg"),
+            "winSD": os.path.join(win_dir, "SD.txt"),
+            "winSE": os.path.join(win_dir, "SE.txt"),
+            "winCorr": os.path.join(win_dir, "corr.txt"),
             "sec": [
                 os.path.join(sec_dir, SAVE_NAMES[s])
                 for s in range(self._N_SECTORS)

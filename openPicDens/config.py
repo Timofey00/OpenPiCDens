@@ -15,6 +15,7 @@ SAVE_PATHS = {
 	"norm_path": "normValuesPorosity",
 	"raw_path": "rawPorosity",
 	"sec_path": "sectorsPorosity",
+	"windows_stats_path": "windows_statistics",
 	"rwl": "rwl"
 }
 

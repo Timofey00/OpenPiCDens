@@ -203,6 +203,7 @@ def initResultsPathsFromImages(root: str, trees_path: str) -> None:
             "minPorosityQ", "sectors", "rawPorosity",
         ],
         "sectorsPorosity": [],
+        "windows_statistics": [],
     }
     initDirTree(root, dir_tree)
 
@@ -219,12 +220,20 @@ def getTreeDirs(trees_path: str) -> dict[str, list[str]]:
     -------
     dict[str, list[str]]
         ``{tree_id: [img_filename, ...]}`` sorted numerically.
+
+    Filenames sort by their first ``-``-separated label (e.g. ``"1999"``
+    in ``"1999-2000.jpg"``) - the single-ring convention's plain
+    ``"<year>.jpg"`` names are unaffected (a name with no ``-`` just sorts
+    by its own value), and the multi-ring convention's ``"a-b-c.jpg"``
+    names (see ``alt_analysis.PICDens._scanSubDirAuto`` - rings within one
+    file are always left-to-right oldest -> newest) sort oldest-file-first
+    to match.
     """
     sub_dir_names = sorted(os.listdir(trees_path), key=int)
     return {
         d: sorted(
             os.listdir(os.path.join(trees_path, d)),
-            key=lambda f: int(f.split(".")[0]),
+            key=lambda f: int(f.split(".")[0].split("-")[0]),
         )
         for d in sub_dir_names
     }
