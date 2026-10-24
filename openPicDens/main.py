@@ -1,7 +1,7 @@
 """
 main.py — usage examples for OpenPiCDens.
 
-Three independent scenarios; uncomment the one you need and run:
+Five independent scenarios; uncomment the one you need and run:
 
     python -m openPicDens.main
 
@@ -11,16 +11,19 @@ Scenarios
 2. scan_unet                  — scan with U-Net binarization (requires a trained model)
 3. scan_from_precomputed_masks — scan from already-binarized images
 4. train_and_scan             — train U-Net from scratch, then scan
+5. scan_rf                    — train a random-forest binariser from masks, then scan
 """
 
 from __future__ import annotations
 
+import logging
+
 import torch
 
 from openPicDens import Binarizer, PICDens
+from openPicDens.rf_binarization import train_rf_model
 from unet.train import train
 from unet.utils import predictImgMask
-from unet.preprocessing import tile_image_mask_pairs
 
 
 # ---------------------------------------------------------------------------
@@ -34,8 +37,8 @@ def scan_otsu() -> None:
     Tune ``ksize`` and ``gap_value`` to suit your material.
     """
     bi = Binarizer(
-        method="Otsu",          # alternatives: "Mean", "Gaussian", "Triangle"
-        blur="Median",          # alternatives: "Gaussian", "NBF", "Bilateral", None
+        method="Otsu",          # any of binarization.BI_METHODS, e.g. "Sauvola", "Li", "Triangle"
+        blur="Median",          # alternatives: "Gaussian", "NBF", "Bilateral", "" (no blur)
         ksize=3,                # blur kernel size (must be odd)
         gamma_equalisation=False,
     )
@@ -47,7 +50,7 @@ def scan_otsu() -> None:
         species_name="PS",            # Pinus sylvestris
         year_start=2024,
         norm_number=100,              # length of the normalised porosity profile
-        pix_to_mcm_coef=0.42604,      # pixels per micrometre
+        pix_to_mcm_coef=0.42604,      # micrometres per pixel
         norm_method="median",         # "small_ring" | "median" | "mean" | "normNumber"
         sma_interval=90,              # SMA smoothing window
         gap_value=50,                 # max white-pixel run kept by gap filter (None = off)
@@ -123,23 +126,14 @@ def scan_from_precomputed_masks() -> None:
 def train_and_scan() -> None:
     """Train a U-Net on your own data, then run a scan.
 
-    Expected training data layout:
+    Expected training data layout (whole micrographs, paired by sorted name):
         train_imgs/   — raw micrographs (.jpg)
-        train_masks/  — binary masks (.png, white pixels = pores)
+        train_masks/  — binary masks (white pixels = lumens)
 
-    If images are too large for the model, tile them first with
-    :func:`~unet.preprocessing.tile_image_mask_pairs`.
+    The images are split into training/validation by image and cut into
+    random tiles every epoch; the tile size, scale and blur are saved in
+    the model and reused by ``Binarizer(method="UNET")``.
     """
-    # --- optional: tile large images before training ----------------------
-    # tile_image_mask_pairs(
-    #     img_root="path/to/raw_imgs/",
-    #     mask_root="path/to/raw_masks/",
-    #     save_img_path="path/to/train_imgs/",
-    #     save_mask_path="path/to/train_masks/",
-    #     size=128,
-    #     scale=1.0,
-    # )
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model_path = "path/to/model.pth"
 
@@ -147,28 +141,30 @@ def train_and_scan() -> None:
     train(
         imgs_path="path/to/train_imgs/",
         mask_path="path/to/train_masks/",
-        output_path="path/to/train_output/",
+        output_path="path/to/train_output/",   # lossPlot.jpeg, <model>_params.txt
         save_model_path=model_path,
-        input_image_width=128,
-        input_image_height=128,
+        tile_size=256,                          # tiles cut from the whole images
+        scale=1.0,                              # binarize with the same scale
         test_split=0.15,
-        batch_size=32,
+        batch_size=8,
         device=device,
         pin_memory=(device == "cuda"),
-        init_lr=1e-3,
-        num_epochs=40,
+        num_epochs=100,                         # stops earlier without improvement
     )
 
     # --- predict mask for a single large image (tiled) -------------------
-    # The image is split into 128×128 tiles, each tile is passed through
-    # the model, and the predicted masks are stitched back together.
-    model = torch.load(model_path).to(device)
+    # The image is cut into 512x512 tiles (the last one flush with the edge),
+    # each passed through the model with the blur it was trained with, and the
+    # tile cores are stitched back together.
+    # weights_only=False: the .pth holds the whole pickled model (torch >= 2.6).
+    model = torch.load(model_path, map_location=device, weights_only=False)
     mask = predictImgMask(
         img_path="path/to/single_image.jpg",
         save_mask_path="path/to/predicted_mask.png",
-        divide_size=128,
+        divide_size=512,
         model=model,
         scale=1.0,
+        overlap=32,
     )
 
     # --- scan with the trained model --------------------------------------
@@ -189,12 +185,57 @@ def train_and_scan() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Scenario 5: random-forest pixel classifier (no GPU, no manual labelling)
+# ---------------------------------------------------------------------------
+
+def scan_rf() -> None:
+    """Train a random-forest binariser from existing masks, then scan.
+
+    Much faster to train than a U-Net (about a minute on CPU) and
+    transfers better to other species. Existing U-Net predictions can be
+    used as training masks. For a new species, draw a few strokes of
+    lumen (white) and wall (black) on a grey (128) canvas and train with
+    ``sparse=True``.
+    """
+    model_path = "path/to/pine_rf.joblib"
+    train_rf_model(
+        img_paths=["path/to/2003.jpg"],
+        mask_paths=["path/to/2003_bi.jpg"],
+        save_path=model_path,
+        work_scale=0.5,     # images are halved before classification
+    )
+
+    bi = Binarizer(
+        method="RF",
+        model_path=model_path,
+        scale=1.0,          # e.g. 2.0 if cells are half as large in pixels
+    )
+
+    scan = PICDens(
+        binarizer=bi,
+        save_path="path/to/results/",
+        root="path/to/images/",
+        species_name="PS",
+        year_start=2024,
+        norm_number=100,
+        pix_to_mcm_coef=0.42604,
+        sma_interval=90,
+        gap_value=50,
+    )
+    scan.startScan()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Progress of the scan and of U-Net training goes to the logging module.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
     # Uncomment the scenario you need:
     scan_otsu()
     # scan_unet()
     # scan_from_precomputed_masks()
     # train_and_scan()
+    # scan_rf()
