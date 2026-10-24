@@ -1,4 +1,5 @@
 import inspect
+import logging
 import math
 import os
 import re
@@ -16,6 +17,8 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from unet.utils import _tile_starts, normalize_blur, preprocess_image
+
+logger = logging.getLogger(__name__)
 
 #: segmentation_models_pytorch architectures :func:`train` can build.
 ARCHITECTURES = (
@@ -227,8 +230,8 @@ def train(
     # pin_memory is only meaningful (and safe) when a CUDA device is available;
     # on CPU-only Windows machines it causes the DataLoader to deadlock.
     if pin_memory and not torch.cuda.is_available():
-        print("[WARNING] pin_memory=True requested but CUDA is not available. "
-              "Disabling pin_memory to prevent DataLoader deadlock on Windows.")
+        logger.warning("pin_memory=True requested but CUDA is not available - "
+                       "disabling pin_memory to prevent a DataLoader deadlock on Windows")
         pin_memory = False
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
@@ -261,8 +264,8 @@ def train(
     val_sources = set(sources[:n_val])
     train_idx = [i for i in keep if keys[i] not in val_sources]
     val_idx = [i for i in keep if keys[i] in val_sources]
-    print(f"[INFO] {len(sources)} source images: {len(sources) - len(val_sources)} train, "
-          f"{len(val_sources)} validation; {n_held} files held out for testing")
+    logger.info("%d source images: %d train, %d validation; %d files held out for testing",
+                len(sources), len(sources) - len(val_sources), len(val_sources), n_held)
 
     def load(i: int) -> tuple[np.ndarray, np.ndarray]:
         return _load_pair(imagePaths[i], maskPaths[i], scale if whole else 1.0, in_channels,
@@ -272,15 +275,16 @@ def train(
     val_items = [load(i) for i in val_idx]
     if not val_items and whole:
         # a single source image: validate on a separate part of it
-        print(f"[WARNING] only one source image - validating on its last {val_frac:.0%} along the longer side")
+        logger.warning("only one source image - validating on its last %.0f%% along the longer side",
+                       val_frac * 100)
         (img, mask), = train_items
         if img.shape[0] < img.shape[1]:
             img, mask = img.swapaxes(0, 1), mask.swapaxes(0, 1)  # cut along the rows
         cut = max(1, round(img.shape[0] * (1 - val_frac)))
         train_items, val_items = [(img[:cut], mask[:cut])], [(img[cut:], mask[cut:])]
     elif not val_items:
-        print("[WARNING] all tiles come from one source image - splitting the tiles at random, "
-              "validation will be optimistic")
+        logger.warning("all tiles come from one source image - splitting the tiles at random, "
+                       "validation will be optimistic")
         if len(train_items) < 2:
             raise ValueError("at least two tiles are needed (training + validation)")
         order = rng.permutation(len(train_items))
@@ -308,8 +312,8 @@ def train(
     trainDS = _CropDataset(train_items, (tile_h, tile_w), (input_h, input_w), random_crops=whole,
                            augment=augment, rng=rng)
     valDS = _GridDataset(val_items, (tile_h, tile_w), (input_h, input_w))
-    print(f"[INFO] {len(trainDS)} training tiles per epoch, {len(valDS)} validation tiles, "
-          f"tile {tile_w}x{tile_h} -> input {input_w}x{input_h}, median lumen {median_area:.0f} px")
+    logger.info("%d training tiles per epoch, %d validation tiles, tile %dx%d -> input %dx%d, "
+                "median lumen %.0f px", len(trainDS), len(valDS), tile_w, tile_h, input_w, input_h, median_area)
 
     # num_workers=0: load data in the main process. On Windows, workers use
     # "spawn", which needs every DataLoader inside `if __name__ == "__main__"`
@@ -317,15 +321,15 @@ def train(
     trainLoader = DataLoader(trainDS, shuffle=True, batch_size=batch_size, pin_memory=pin_memory, num_workers=0)
     valLoader = DataLoader(valDS, shuffle=False, batch_size=batch_size, pin_memory=pin_memory, num_workers=0)
 
-    print(f"[INFO] loading {architecture} / {encoder_name} "
-          f"(encoder weights may be downloaded on first run)...")
+    logger.info("loading %s / %s (encoder weights may be downloaded on first run)...",
+                architecture, encoder_name)
     unet = getattr(smp, architecture)(
         encoder_name=encoder_name,
         encoder_weights=encoder_weights,
         in_channels=in_channels,
         classes=1,  # binary segmentation: lumen / wall
     ).to(device)
-    print(f"[INFO] model ready on {device}.")
+    logger.info("model ready on %s", device)
 
     opt = torch.optim.AdamW(unet.parameters(), lr=init_lr, weight_decay=1e-4)
     if scheduler == "plateau":
@@ -374,7 +378,7 @@ def train(
 
     H = {"train_loss": [], "val_loss": [], **{f"val_{k}": [] for k in SELECT_METRICS}}
     best_score, best_epoch, best_state, best = -1.0, 0, None, {}
-    print("[INFO] training the network...")
+    logger.info("training the network...")
     startTime = time.time()
 
     for e in tqdm(range(num_epochs), desc="Epochs", disable=quiet):
@@ -413,8 +417,9 @@ def train(
             save()
 
         shown = ", ".join(f"{k} {metrics[k]:.4f}" for k in SELECT_METRICS)
-        print(f"[INFO] EPOCH: {e + 1}/{num_epochs}  train loss {train_loss:.4f}, val loss {val_loss:.4f}, "
-              f"val {shown}{' (best ' + select_metric + ')' if improved else ''}, lr {opt.param_groups[0]['lr']:.2e}")
+        logger.info("epoch %d/%d: train loss %.4f, val loss %.4f, val %s%s, lr %.2e",
+                    e + 1, num_epochs, train_loss, val_loss, shown,
+                    f" (best {select_metric})" if improved else "", opt.param_groups[0]["lr"])
         args = (e + 1, num_epochs, train_loss, val_loss)
         kwargs = {}
         if pass_iou:
@@ -422,17 +427,17 @@ def train(
         if pass_metrics:
             kwargs["metrics"] = dict(metrics, select=select_metric, best=best_score, best_epoch=best_epoch)
         if on_epoch is not None and on_epoch(*args, **kwargs):
-            print(f"[INFO] training stopped after epoch {e + 1}")
+            logger.info("training stopped after epoch %d", e + 1)
             break
         if patience and e + 1 - best_epoch >= patience:
-            print(f"[INFO] early stopping: no better validation {select_metric} for {patience} epochs")
+            logger.info("early stopping: no better validation %s for %d epochs", select_metric, patience)
             break
 
-    print("[INFO] total time taken to train the model: {:.2f}s".format(time.time() - startTime))
+    logger.info("total time taken to train the model: %.2fs", time.time() - startTime)
     if best_state is not None:
         unet.load_state_dict(best_state)
     else:  # every epoch's validation metric was NaN (e.g. no lumen in the validation images)
-        print("[WARNING] no epoch had a valid validation metric - keeping the last epoch's weights")
+        logger.warning("no epoch had a valid validation metric - keeping the last epoch's weights")
     meta["training"]["seconds"] = round(time.time() - startTime, 1)
     save()
     _plot(H, best_epoch, select_metric, loss, output_path)
