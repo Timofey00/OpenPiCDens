@@ -287,8 +287,8 @@ def joinDivideImgs(
     if not tiles:
         raise ValueError(
             "joinDivideImgs received an empty tile list — nothing to "
-            "reassemble. Check that cutAndPadImg / make_predictions "
-            "produced at least one tile."
+            "reassemble. Check that cutAndPadImg (and the model run on "
+            "its tiles) produced at least one tile."
         )
 
     size = tiles[0].shape[0]
@@ -571,7 +571,8 @@ def _tile_probability(model: torch.nn.Module, tile: np.ndarray, device) -> np.nd
     if raw.shape[1] == 1:
         logits = raw[0, 0]
     elif raw.shape[1] == 3:
-        # legacy checkpoints with 3 near-identical output channels (see make_predictions)
+        # legacy checkpoints (trained before classes=1) output the mask duplicated into
+        # 3 near-identical channels: averaging their logits collapses them back to one
         logits = raw[0].mean(dim=0)
     else:
         raise ValueError(
