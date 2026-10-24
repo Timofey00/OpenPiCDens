@@ -1,21 +1,36 @@
-# Core data processing and analysis
-numpy>=1.20.0
-pandas>=1.3.0
+# OpenPiCDens dependencies (Python 3.10+, tested on 3.12)
+# Install with: pip install -r requirements.txt
+#
+# Minimum versions are the ones the code is tested with (and the exe is built
+# with, see build_exe/requirements-cu124.txt).
+#
+# For an NVIDIA GPU install the CUDA build of torch/torchvision first (driver >= 551):
+#   pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
 
-# Image processing and computer vision
-opencv-python>=4.5.0
+# Image processing
+opencv-python>=4.10
+scikit-image>=0.24
+pillow>=10.4
 
-# Machine learning and deep learning
-torch>=1.9.0
-torchvision>=0.10.0
+# Numeric / data
+numpy>=1.26
+pandas>=2.2,<3        # pandas 3 (copy-on-write, string dtype) is not tested
+scipy>=1.14
 
-# Scientific computing and interpolation
-scipy>=1.7.0
+# Machine learning
+scikit-learn>=1.5     # random-forest binarization
+joblib>=1.4           # RF model files
+torch>=2.3
+torchvision>=0.18     # required by segmentation-models-pytorch; must match torch
+segmentation-models-pytorch>=0.3.4,<0.4
 
-# Image processing and filtering (for Triangle threshold method)
-scikit-image>=0.18.0
+# Visualisation
+matplotlib>=3.9
 
-# Additional dependencies commonly used with U-Net projects
-matplotlib>=3.4.0
-tqdm>=4.62.0
-Pillow>=8.3.0
+# Desktop GUI (tracheid_gui)
+PySide6>=6.11
+
+# Utilities
+imutils>=0.5.4
+tqdm>=4.66
+openpyxl>=3.1         # .xlsx tables
