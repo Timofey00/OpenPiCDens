@@ -76,11 +76,9 @@ openPicDens/
     config.py           — default paths, filenames, and constants
     main.py             — runnable usage examples for all workflows
 unet/
-    dataset.py          — PyTorch Dataset for image/mask pairs
     preprocessing.py    — tiling large images and masks for training
     train.py            — U-Net training loop
-    predict.py          — single-tile inference
-    utils.py            — image splitting/stitching for full-size prediction
+    utils.py            — tiled full-size prediction and shared preprocessing
 ```
 
 ## Publications
