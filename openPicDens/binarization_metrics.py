@@ -169,10 +169,12 @@ def find_reference(
     return None
 
 
-def build_stem_index(ref_dir: str | os.PathLike) -> dict[str, list[Path]]:
-    """Image files under *ref_dir* (recursively) by lower-case stem."""
+def build_stem_index(
+    ref_dir: str | os.PathLike, exclude: str | os.PathLike | None = None,
+) -> dict[str, list[Path]]:
+    """Image files under *ref_dir* (recursively, nothing inside *exclude*) by lower-case stem."""
     index: dict[str, list[Path]] = {}
-    for path in list_images(ref_dir, recursive=True):
+    for path in list_images(ref_dir, recursive=True, exclude=exclude):
         index.setdefault(path.stem.lower(), []).append(path)
     return index
 
@@ -183,6 +185,10 @@ def pair_with_references(
 ) -> tuple[list[tuple[Path, Path, Path]], list[Path]]:
     """Source images of *src* (a file or a directory) with their references.
 
+    *exclude* (the test's output folder) is left out of both the sources and the references, so
+    masks written by an earlier run inside *ref_dir* never count as references. An image whose
+    only "reference" is the image file itself (*ref_dir* is the source folder) has none.
+
     Returns ``[(image, path relative to src, reference), ...]`` and the
     relative paths of images that have no reference.
     """
@@ -191,15 +197,24 @@ def pair_with_references(
         images, root = [src], src.parent
     else:
         images, root = list_images(src, recursive=recursive, exclude=exclude), src
-    index = build_stem_index(ref_dir)
+    index = build_stem_index(ref_dir, exclude=exclude)
     pairs, missing = [], []
+    n_self = 0
     for image in images:
         rel = image.relative_to(root)
         ref = find_reference(rel, ref_dir, index)
+        if ref is not None and ref.resolve() == image.resolve():
+            n_self += 1
+            ref = None
         if ref is None:
             missing.append(rel)
         else:
             pairs.append((image, rel, ref))
+    if n_self:
+        logger.warning(
+            "%d снимков нашли в %s самих себя вместо эталона - папка эталонов совпадает с папкой "
+            "снимков? Они пропущены", n_self, ref_dir,
+        )
     return pairs, missing
 
 
@@ -268,6 +283,9 @@ def run_binarization_test(
     for rel in missing:
         logger.warning("%s: нет эталона в %s - пропущен", rel, ref_dir)
     if not pairs:
+        src_dir = Path(src) if Path(src).is_dir() else Path(src).parent
+        if src_dir.resolve() == Path(ref_dir).resolve():
+            raise ValueError(f"Папка эталонов совпадает с папкой снимков: {ref_dir}")
         raise ValueError(f"Ни для одного снимка не найден эталон в {ref_dir}")
     binarizers = _make_binarizers(methods, unet_model_path, rf_model_path, binarizer_kwargs, method_kwargs)
     settings = {method: binarizer.describe() for method, binarizer in binarizers.items()}
