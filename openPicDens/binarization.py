@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -380,9 +381,11 @@ class Binarizer:
         parameters (:meth:`preprocess_key`), not on *method*.
         """
         if self.scale != 1.0:
+            # INTER_AREA when shrinking: cubic interpolation aliases there and
+            # can break thin latewood walls (UNET and RF already shrink this way)
             img = cv2.resize(
                 img, None, fx=self.scale, fy=self.scale,
-                interpolation=cv2.INTER_CUBIC,
+                interpolation=cv2.INTER_AREA if self.scale < 1 else cv2.INTER_CUBIC,
             )
         # Convert to grayscale before any single-channel operations
         if img.ndim == 3:
@@ -395,8 +398,10 @@ class Binarizer:
         """Binarise every image under *src_root* and mirror results to *dst_root*.
 
         The directory layout ``src_root/<id>/<img>`` is preserved under
-        *dst_root*.  Sub-directories must be named with integer IDs;
-        image filenames must have integer stems (used for sorting).
+        *dst_root*. Sub-directories and images (:data:`IMAGE_EXTENSIONS`) are
+        processed in natural order (``"2"`` before ``"10"``), any names -
+        ``2000.jpg``, ``2000.1.jpg``, ``1999-2000.jpg``; other files are
+        skipped.
 
         Parameters
         ----------
@@ -404,18 +409,31 @@ class Binarizer:
             Source root directory.
         dst_root : str
             Destination root directory.
+
+        Raises
+        ------
+        OSError
+            If a binarized image cannot be written.
         """
-        sub_dirs = sorted(os.listdir(src_root))
+        sub_dirs = sorted(
+            (d for d in os.listdir(src_root) if os.path.isdir(os.path.join(src_root, d))),
+            key=_natural_key,
+        )
         for sub in sub_dirs:
             src_dir = os.path.join(src_root, sub)
             img_names = sorted(
-                os.listdir(src_dir), key=lambda f: int(f.split(".")[0])
+                (f for f in os.listdir(src_dir)
+                 if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
+                 and os.path.isfile(os.path.join(src_dir, f))),
+                key=lambda f: _natural_key(os.path.splitext(f)[0]),
             )
             dst_dir = os.path.join(dst_root, sub)
             initPath(dst_dir)
             for img_name in img_names:
                 bi_img = self.binarize(os.path.join(src_dir, img_name))
-                cv2.imwrite(os.path.join(dst_dir, img_name), bi_img)
+                dst_path = os.path.join(dst_dir, img_name)
+                if not cv2.imwrite(dst_path, bi_img):
+                    raise OSError(f"не удалось записать {dst_path}")
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -523,10 +541,8 @@ class Binarizer:
                 bi = cv2.resize(bi, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
             return remove_specks(bi, self.min_lumen_area, self.max_hole_area)
 
-        # Fallback: fixed threshold
-        _, bi = cv2.threshold(
-            img, self.constant_th, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU
-        )
+        # Fallback: fixed threshold (without THRESH_OTSU, which would ignore it)
+        _, bi = cv2.threshold(img, self.constant_th, 255, cv2.THRESH_BINARY)
         return bi
 
 
@@ -749,6 +765,13 @@ def _read_image(img_path: str) -> np.ndarray:
     if img is None:
         raise FileNotFoundError(f"Не удалось прочитать изображение: {img_path}")
     return img
+
+
+def _natural_key(name: str) -> tuple:
+    """Sort key that orders the numbers inside *name* (a folder name or a file stem) by
+    value: ``"2"`` < ``"10"``, ``"2000"`` < ``"2000.1"`` < ``"2000.2"`` < ``"2001-2003"``."""
+    return tuple((0, int(part)) if part.isdigit() else (1, part.lower())
+                 for part in re.split(r"(\d+)", name) if part)
 
 
 def _to_mask(lumen: np.ndarray) -> np.ndarray:
